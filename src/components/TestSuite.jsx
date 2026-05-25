@@ -59,7 +59,7 @@ export default function TestSuite({ openCvLoaded }) {
       testLandmarker = await HandLandmarker.createFromOptions(vision, {
         baseOptions: {
           modelAssetPath: window.location.origin + "/hand_landmarker.task",
-          delegate: "GPU"
+          delegate: "CPU"
         },
         runningMode: "IMAGE",
         numHands: 2,

@@ -94,7 +94,7 @@ export default function ARCamera({
         const landmarker = await HandLandmarker.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath: window.location.origin + "/hand_landmarker.task",
-            delegate: "GPU"
+            delegate: "CPU"
           },
           runningMode: "VIDEO",
           numHands: 2,
