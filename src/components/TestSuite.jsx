@@ -54,11 +54,11 @@ export default function TestSuite({ openCvLoaded }) {
     let testLandmarker;
     try {
       const vision = await FilesetResolver.forVisionTasks(
-        "/wasm/"
+        window.location.origin + "/wasm/"
       );
       testLandmarker = await HandLandmarker.createFromOptions(vision, {
         baseOptions: {
-          modelAssetPath: "/hand_landmarker.task",
+          modelAssetPath: window.location.origin + "/hand_landmarker.task",
           delegate: "GPU"
         },
         runningMode: "IMAGE",

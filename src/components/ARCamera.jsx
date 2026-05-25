@@ -88,12 +88,12 @@ export default function ARCamera({
         if (addLog) addLog("Loading MediaPipe Hand Landmarker...");
         
         const vision = await FilesetResolver.forVisionTasks(
-          "/wasm/"
+          window.location.origin + "/wasm/"
         );
         
         const landmarker = await HandLandmarker.createFromOptions(vision, {
           baseOptions: {
-            modelAssetPath: "/hand_landmarker.task",
+            modelAssetPath: window.location.origin + "/hand_landmarker.task",
             delegate: "GPU"
           },
           runningMode: "VIDEO",
