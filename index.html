@@ -37,6 +37,9 @@
           if (typeof cv !== 'undefined') {
             window.cv = cv;
             console.log("OpenCV.js initialized successfully!");
+            if (window.Module) {
+              delete window.Module;
+            }
             window.dispatchEvent(new Event('opencv-ready'));
           } else {
             console.log("onRuntimeInitialized triggered by a non-OpenCV module.");
@@ -45,7 +48,16 @@
       };
     </script>
     <script src="/opencv.js" async defer></script>
-
+    <script type="text/javascript">
+      import("/vision_bundle.js").then((mod) => {
+        window.FilesetResolver = mod.FilesetResolver;
+        window.HandLandmarker = mod.HandLandmarker;
+        console.log("MediaPipe loaded globally!");
+        window.dispatchEvent(new Event('mediapipe-ready'));
+      }).catch((err) => {
+        console.error("Failed to load MediaPipe globally:", err);
+      });
+    </script>
 
   </head>
   <body>

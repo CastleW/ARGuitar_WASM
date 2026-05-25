@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { HandLandmarker } from '@mediapipe/tasks-vision';
 import { detectMarkers } from '../utils/aruco_detector';
 import { 
   calculateFretAndStringFromGuitarMarkers,
   createCameraMats,
-  solvePose
+  solvePose,
+  FRET_ABSOLUTE_DISTANCES_FROM_NUT,
+  TOTAL_FRET_LENGTH_IN_CM
 } from '../utils/guitar_math';
 import { CheckCircle2, XCircle, Play, AlertCircle, RefreshCw } from 'lucide-react';
 
@@ -47,35 +48,49 @@ export default function TestSuite({ openCvLoaded }) {
       return;
     }
 
+    const { FilesetResolver, HandLandmarker } = window;
+    if (!FilesetResolver || !HandLandmarker) {
+      alert("MediaPipe Hand Landmarker is still loading globally. Please wait a moment.");
+      return;
+    }
+
     setRunning(true);
     setResults({ passed: 0, failed: 0, total: allTests.length });
     setCurrentTestName('Initializing image landmarker...');
 
     let testLandmarker;
     try {
-      const supportsSimd = (() => {
-        try {
-          return WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11]));
-        } catch {
-          return false;
+      const vision = await FilesetResolver.forVisionTasks(
+        window.location.origin + "/wasm"
+      );
+      const response = await fetch(window.location.origin + "/hand_landmarker.task");
+      if (!response.ok) throw new Error(`Failed to fetch model file: ${response.statusText}`);
+      const modelBuffer = new Uint8Array(await response.arrayBuffer());
+      
+      // Temporarily hide window.Module if it exists to prevent Emscripten collision
+      const tempModule = window.Module;
+      if (window.Module) {
+        // eslint-disable-next-line react-hooks/immutability
+        window.Module = undefined;
+      }
+      
+      try {
+        testLandmarker = await HandLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetBuffer: modelBuffer,
+            delegate: "CPU"
+          },
+          runningMode: "IMAGE",
+          numHands: 2,
+          minHandDetectionConfidence: 0.5,
+          minHandPresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+      } finally {
+        if (tempModule) {
+          window.Module = tempModule;
         }
-      })();
-      const suffix = supportsSimd ? "vision_wasm_internal" : "vision_wasm_nosimd_internal";
-      const vision = {
-        wasmLoaderPath: window.location.origin + "/wasm/" + suffix + ".js",
-        wasmBinaryPath: window.location.origin + "/wasm/" + suffix + ".wasm"
-      };
-      testLandmarker = await HandLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath: window.location.origin + "/hand_landmarker.task",
-          delegate: "CPU"
-        },
-        runningMode: "IMAGE",
-        numHands: 2,
-        minHandDetectionConfidence: 0.5,
-        minHandPresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
+      }
     } catch (err) {
       console.error("Failed to load test HandLandmarker:", err);
       alert("Failed to initialize MediaPipe Hand Landmarker for tests: " + err.message);
@@ -152,7 +167,8 @@ export default function TestSuite({ openCvLoaded }) {
           let srcMat = cv.matFromImageData(imgData);
           
           // 2. Detect ArUco Markers
-          const detectedMarkers = detectMarkers(cv, srcMat);
+          const markerResult = detectMarkers(cv, srcMat);
+          const detectedMarkers = markerResult.markers;
           const markers = {};
           detectedMarkers.forEach(m => {
             markers[m.id] = m;
@@ -175,9 +191,9 @@ export default function TestSuite({ openCvLoaded }) {
           srcMat.delete();
           
           // 3. MediaPipe Hand tracking on static image
-          const mpResults = testLandmarker.detect(img);
+          const mpResults = testLandmarker.detect(canvas);
           
-          if (!mpResults.handLandmarks || mpResults.handLandmarks.length === 0) {
+          if (!mpResults.landmarks || mpResults.landmarks.length === 0) {
             resolve({
               ...test,
               status: 'FAIL',
@@ -190,8 +206,8 @@ export default function TestSuite({ openCvLoaded }) {
           
           // Find Left Hand (fretting hand)
           let fretHandLandmarks = null;
-          mpResults.handLandmarks.forEach((hand, i) => {
-            const handedness = mpResults.handedness[i][0];
+          mpResults.landmarks.forEach((hand, i) => {
+            const handedness = mpResults.handednesses[i][0];
             if (handedness.categoryName !== 'Right') {
               fretHandLandmarks = hand;
             }
@@ -199,7 +215,7 @@ export default function TestSuite({ openCvLoaded }) {
           
           if (!fretHandLandmarks) {
             // Fallback to first hand if handedness classification is inverted
-            fretHandLandmarks = mpResults.handLandmarks[0];
+            fretHandLandmarks = mpResults.landmarks[0];
           }
           
           // Get Index Finger Tip (landmark index 8)
@@ -229,6 +245,24 @@ export default function TestSuite({ openCvLoaded }) {
           const detectedFret = fretInfo[0];
           const detectedString = fretInfo[1];
           
+          // Calculate fretLocator for diagnostics
+          const p1 = guitarStart, p2 = guitarEnd, p3 = indexTipPos;
+          const a = p2.y - p1.y;
+          const b = p1.x - p2.x;
+          const c = p2.x * p1.y - p1.x * p2.y;
+          const denom = a*a + b*b;
+          let ix = p1.x, iy = p1.y;
+          if (denom !== 0) {
+            ix = ((b*b * p3.x) - (a * b * p3.y) - (a * c)) / denom;
+            iy = ((a*a * p3.y) - (a * b * p3.x) - (b * c)) / denom;
+          }
+          const distFromStart = Math.sqrt((ix - p1.x)**2 + (iy - p1.y)**2);
+          const guitarLength = Math.sqrt((p2.x - p1.x)**2 + (p2.y - p1.y)**2);
+          const fretLocator = distFromStart * TOTAL_FRET_LENGTH_IN_CM / (guitarLength || 1);
+          
+          const expectedRangeLower = test.expectedFret === 1 ? 0.0 : FRET_ABSOLUTE_DISTANCES_FROM_NUT[test.expectedFret - 2];
+          const expectedRangeUpper = FRET_ABSOLUTE_DISTANCES_FROM_NUT[test.expectedFret - 1];
+
           // 5. Evaluate pass criteria
           let passed = false;
           if (test.type === 'fret') {
@@ -242,7 +276,7 @@ export default function TestSuite({ openCvLoaded }) {
             status: passed ? 'PASS' : 'FAIL',
             detectedFret,
             detectedString,
-            error: passed ? null : `Expected: Fret ${test.expectedFret}${test.expectedString ? `, String ${test.expectedString}` : ''}. Got: Fret ${detectedFret}, String ${detectedString}`
+            error: passed ? null : `Expected: Fret ${test.expectedFret}${test.expectedString ? `, String ${test.expectedString}` : ''}. Got: Fret ${detectedFret}, String ${detectedString} (fretLocator: ${fretLocator.toFixed(2)} cm, Range: [${expectedRangeLower.toFixed(2)} - ${expectedRangeUpper.toFixed(2)} cm])`
           });
           
         } catch (err) {

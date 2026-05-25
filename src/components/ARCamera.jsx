@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { Play, Square, Video } from 'lucide-react';
-import { HandLandmarker } from '@mediapipe/tasks-vision';
 import { detectMarkers } from '../utils/aruco_detector';
 import { 
   calculateGuitarFromMarkers, 
@@ -27,6 +26,7 @@ export default function ARCamera({
   
   const loopRef = useRef(null);
   const landmarkerRef = useRef(null);
+  const loadingRef = useRef(false);
   const lastTimeRef = useRef(0);
   const lastLoggedIdsRef = useRef("");
   const lastDiagTimeRef = useRef(0);
@@ -47,6 +47,10 @@ export default function ARCamera({
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.play();
+        
+        // Lazy-load MediaPipe HandLandmarker when webcam starts BEFORE starting the heavy frame processing loop
+        await initMediaPipe();
+        
         setCameraActive(true);
         if (onStatusUpdate) {
           onStatusUpdate("Camera Active | Initializing tracking...", null);
@@ -79,35 +83,61 @@ export default function ARCamera({
     }
   };
 
-  // Initialize MediaPipe Hand Landmarker
-  useEffect(() => {
-    let active = true;
-    async function initMediaPipe() {
+  // Initialize MediaPipe Hand Landmarker standalone async function
+  const initMediaPipe = async () => {
+    const { FilesetResolver, HandLandmarker } = window;
+    if (!FilesetResolver || !HandLandmarker) {
+      console.error("MediaPipe is not loaded globally on window yet.");
+      if (addLog) addLog("❌ MediaPipe Error: Library not ready on window.");
+      return;
+    }
+    if (landmarkerRef.current) {
+      console.log("MediaPipe HandLandmarker already loaded.");
+      return;
+    }
+    if (loadingRef.current) {
+      console.log("MediaPipe HandLandmarker loading in progress.");
+      return;
+    }
+    loadingRef.current = true;
+    try {
+      console.log("Loading MediaPipe Landmarker in ARCamera...");
+      if (addLog) addLog("MediaPipe Init: Starting...");
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      console.log("MediaPipe Init: Resolving local assets via FilesetResolver...");
+      if (addLog) addLog("MediaPipe Init: Resolving local assets...");
+      const vision = await FilesetResolver.forVisionTasks(
+        window.location.origin + "/wasm"
+      );
+      console.log("MediaPipe Init: Local assets resolved!", vision);
+      if (addLog) addLog("MediaPipe Init: Local assets resolved!");
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      console.log("MediaPipe Init: Fetching model file...");
+      if (addLog) addLog("MediaPipe Init: Fetching model file...");
+      const response = await fetch(window.location.origin + "/hand_landmarker.task");
+      if (!response.ok) throw new Error(`Failed to fetch model file: ${response.statusText}`);
+      const modelBuffer = new Uint8Array(await response.arrayBuffer());
+      console.log("MediaPipe Init: Model file fetched successfully!", modelBuffer.length);
+      if (addLog) addLog(`MediaPipe Init: Model file fetched! (${(modelBuffer.length / 1024 / 1024).toFixed(1)} MB)`);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      console.log("MediaPipe Init: Creating HandLandmarker instance...");
+      if (addLog) addLog("MediaPipe Init: Creating HandLandmarker instance...");
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      // Temporarily hide window.Module if it exists to prevent Emscripten collision
+      const tempModule = window.Module;
+      if (window.Module) {
+        window.Module = undefined;
+      }
+      
+      let landmarker;
       try {
-        console.log("Loading MediaPipe Landmarker in ARCamera...");
-        if (addLog) addLog("MediaPipe Init: Starting...");
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        console.log("MediaPipe Init: Bypassing fileset resolver...");
-        if (addLog) addLog("MediaPipe Init: Resolving local assets...");
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        const suffix = "vision_wasm_internal"; // Assume SIMD is supported
-        const vision = {
-          wasmLoaderPath: window.location.origin + "/wasm/" + suffix + ".js",
-          wasmBinaryPath: window.location.origin + "/wasm/" + suffix + ".wasm"
-        };
-        console.log("MediaPipe Init: Local assets resolved!", vision);
-        if (addLog) addLog("MediaPipe Init: Local assets resolved!");
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        console.log("MediaPipe Init: Creating HandLandmarker instance...");
-        if (addLog) addLog("MediaPipe Init: Creating HandLandmarker instance...");
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        const landmarker = await HandLandmarker.createFromOptions(vision, {
+        landmarker = await HandLandmarker.createFromOptions(vision, {
           baseOptions: {
-            modelAssetPath: window.location.origin + "/hand_landmarker.task",
+            modelAssetBuffer: modelBuffer,
             delegate: "CPU"
           },
           runningMode: "VIDEO",
@@ -116,36 +146,27 @@ export default function ARCamera({
           minHandPresenceConfidence: 0.5,
           minTrackingConfidence: 0.5
         });
-        console.log("MediaPipe Init: HandLandmarker instance created!");
-        if (addLog) addLog("MediaPipe Init: HandLandmarker instance created!");
-        
-        if (active) {
-          landmarkerRef.current = landmarker;
-          setMediaPipeLoaded(true);
-          if (onMediaPipeLoaded) onMediaPipeLoaded(true);
-          console.log("MediaPipe Hand Landmarker loaded successfully!");
-          if (addLog) addLog("MediaPipe: READY!");
-        } else {
-          landmarker.close();
+      } finally {
+        if (tempModule) {
+          window.Module = tempModule;
         }
-      } catch (err) {
-        console.error("Failed to load MediaPipe Landmarker:", err);
-        if (addLog) addLog("❌ MediaPipe Error: " + err.message);
-        if (onMediaPipeLoaded) onMediaPipeLoaded(false);
       }
-    }
-    initMediaPipe();
-    
-    return () => {
-      active = false;
-      if (landmarkerRef.current) {
-        landmarkerRef.current.close();
-        landmarkerRef.current = null;
-      }
+      console.log("MediaPipe Init: HandLandmarker instance created!");
+      if (addLog) addLog("MediaPipe Init: HandLandmarker instance created!");
+      
+      landmarkerRef.current = landmarker;
+      setMediaPipeLoaded(true);
+      if (onMediaPipeLoaded) onMediaPipeLoaded(true);
+      console.log("MediaPipe Hand Landmarker loaded successfully!");
+      if (addLog) addLog("MediaPipe: READY!");
+    } catch (err) {
+      console.error("Failed to load MediaPipe Landmarker:", err);
+      if (addLog) addLog("❌ MediaPipe Error: " + err.message);
       if (onMediaPipeLoaded) onMediaPipeLoaded(false);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    } finally {
+      loadingRef.current = false;
+    }
+  };
 
 
   // Frame processing loop
@@ -235,9 +256,9 @@ export default function ARCamera({
     let handLandmarksResults = null;
     if (mediaPipeLoaded && landmarkerRef.current) {
       try {
-        handLandmarksResults = landmarkerRef.current.detectForVideo(video, timestamp);
-        if (handLandmarksResults && handLandmarksResults.handLandmarks) {
-          handLandmarks = handLandmarksResults.handLandmarks;
+        handLandmarksResults = landmarkerRef.current.detectForVideo(procCanvas, timestamp);
+        if (handLandmarksResults && handLandmarksResults.landmarks) {
+          handLandmarks = handLandmarksResults.landmarks;
         }
       } catch (err) {
         console.error("Error in hand tracking:", err);
@@ -292,7 +313,7 @@ export default function ARCamera({
     let indexTipPos = null;
     if (handLandmarks && handLandmarks.length > 0) {
       handLandmarks.forEach((hand, idx) => {
-        const handedness = handLandmarksResults.handedness[idx]?.[0];
+        const handedness = handLandmarksResults.handednesses[idx]?.[0];
         if (handedness && handedness.categoryName !== 'Right') {
           fretHandLandmarks = hand;
         }
@@ -534,7 +555,13 @@ export default function ARCamera({
         const tracks = videoNode.srcObject.getTracks();
         tracks.forEach(track => track.stop());
       }
+      if (landmarkerRef.current) {
+        landmarkerRef.current.close();
+        landmarkerRef.current = null;
+      }
+      if (onMediaPipeLoaded) onMediaPipeLoaded(false);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
