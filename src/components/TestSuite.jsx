@@ -54,7 +54,7 @@ export default function TestSuite({ openCvLoaded }) {
     let testLandmarker;
     try {
       const vision = await FilesetResolver.forVisionTasks(
-        "/wasm"
+        "/wasm/"
       );
       testLandmarker = await HandLandmarker.createFromOptions(vision, {
         baseOptions: {

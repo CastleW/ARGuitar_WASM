@@ -88,7 +88,7 @@ export default function ARCamera({
         if (addLog) addLog("Loading MediaPipe Hand Landmarker...");
         
         const vision = await FilesetResolver.forVisionTasks(
-          "/wasm"
+          "/wasm/"
         );
         
         const landmarker = await HandLandmarker.createFromOptions(vision, {
