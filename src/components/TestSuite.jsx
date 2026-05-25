@@ -54,7 +54,7 @@ export default function TestSuite({ openCvLoaded }) {
     let testLandmarker;
     try {
       const vision = await FilesetResolver.forVisionTasks(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+        "/wasm"
       );
       testLandmarker = await HandLandmarker.createFromOptions(vision, {
         baseOptions: {

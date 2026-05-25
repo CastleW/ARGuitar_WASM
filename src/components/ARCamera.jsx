@@ -88,7 +88,7 @@ export default function ARCamera({
         if (addLog) addLog("Loading MediaPipe Hand Landmarker...");
         
         const vision = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+          "/wasm"
         );
         
         const landmarker = await HandLandmarker.createFromOptions(vision, {
