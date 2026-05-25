@@ -1,8 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Play, Square, Video } from 'lucide-react';
+import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import { detectMarkers } from '../utils/aruco_detector';
 import { 
   calculateGuitarFromMarkers, 
+  calculateFretAndStringFromGuitarMarkers,
   createCameraMats,
   solvePose,
   FRETS_FOR_DRAWING,
@@ -13,6 +15,7 @@ import {
 export default function ARCamera({
   openCvLoaded,
   onStatusUpdate,
+  onMediaPipeLoaded,
   addLog
 }) {
   const videoRef = useRef(null);
@@ -20,8 +23,10 @@ export default function ARCamera({
   const processingCanvasRef = useRef(null);
   
   const [cameraActive, setCameraActive] = useState(false);
+  const [mediaPipeLoaded, setMediaPipeLoaded] = useState(false);
   
   const loopRef = useRef(null);
+  const landmarkerRef = useRef(null);
   const lastTimeRef = useRef(0);
   const lastLoggedIdsRef = useRef("");
   const lastDiagTimeRef = useRef(0);
@@ -74,17 +79,58 @@ export default function ARCamera({
     }
   };
 
-  // Start processing loop when camera and OpenCV.js are ready
+  // Initialize MediaPipe Hand Landmarker
   useEffect(() => {
-    if (cameraActive && openCvLoaded) {
-      loopRef.current = requestAnimationFrame(processFrame);
-    }
-    return () => {
-      if (loopRef.current) {
-        cancelAnimationFrame(loopRef.current);
+    let active = true;
+    async function initMediaPipe() {
+      try {
+        console.log("Loading MediaPipe Landmarker in ARCamera...");
+        if (addLog) addLog("Loading MediaPipe Hand Landmarker...");
+        
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+        );
+        
+        const landmarker = await HandLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "/hand_landmarker.task",
+            delegate: "GPU"
+          },
+          runningMode: "VIDEO",
+          numHands: 2,
+          minHandDetectionConfidence: 0.5,
+          minHandPresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+        
+        if (active) {
+          landmarkerRef.current = landmarker;
+          setMediaPipeLoaded(true);
+          if (onMediaPipeLoaded) onMediaPipeLoaded(true);
+          console.log("MediaPipe Hand Landmarker loaded successfully!");
+          if (addLog) addLog("MediaPipe Hand Landmarker loaded successfully!");
+        } else {
+          landmarker.close();
+        }
+      } catch (err) {
+        console.error("Failed to load MediaPipe Landmarker:", err);
+        if (addLog) addLog("❌ MediaPipe Error: " + err.message);
+        if (onMediaPipeLoaded) onMediaPipeLoaded(false);
       }
+    }
+    initMediaPipe();
+    
+    return () => {
+      active = false;
+      if (landmarkerRef.current) {
+        landmarkerRef.current.close();
+        landmarkerRef.current = null;
+      }
+      if (onMediaPipeLoaded) onMediaPipeLoaded(false);
     };
-  }, [cameraActive, openCvLoaded]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
 
   // Frame processing loop
   const processFrame = async (timestamp) => {
@@ -167,6 +213,20 @@ export default function ARCamera({
     camMatrix.delete();
     distCoef.delete();
     srcMat.delete();
+
+    // 2. Detect hands using MediaPipe
+    let handLandmarks = null;
+    let handLandmarksResults = null;
+    if (mediaPipeLoaded && landmarkerRef.current) {
+      try {
+        handLandmarksResults = landmarkerRef.current.detectForVideo(video, timestamp);
+        if (handLandmarksResults && handLandmarksResults.handLandmarks) {
+          handLandmarks = handLandmarksResults.handLandmarks;
+        }
+      } catch (err) {
+        console.error("Error in hand tracking:", err);
+      }
+    }
     
     // Update logged IDs if they changed to prevent console spam
     const currentIdsStr = detectedMarkers.map(m => m.id).sort().join(", ");
@@ -178,6 +238,7 @@ export default function ARCamera({
     }
     
     // Log diagnostics every 3 seconds if there are failures
+    // eslint-disable-next-line react-hooks/purity
     const now = performance.now();
     if (now - lastDiagTimeRef.current > 3000) {
       lastDiagTimeRef.current = now;
@@ -209,13 +270,46 @@ export default function ARCamera({
       ctx.closePath();
       ctx.stroke();
     });
+
+    // Find fretting hand tip (landmark index 8 is index finger tip)
+    let fretHandLandmarks = null;
+    let indexTipPos = null;
+    if (handLandmarks && handLandmarks.length > 0) {
+      handLandmarks.forEach((hand, idx) => {
+        const handedness = handLandmarksResults.handedness[idx]?.[0];
+        if (handedness && handedness.categoryName !== 'Right') {
+          fretHandLandmarks = hand;
+        }
+      });
+      if (!fretHandLandmarks) {
+        fretHandLandmarks = handLandmarks[0]; // Fallback to first hand
+      }
+      
+      if (fretHandLandmarks) {
+        const tip = fretHandLandmarks[8];
+        indexTipPos = {
+          x: tip.x * width,
+          y: tip.y * height
+        };
+      }
+    }
     
     // 3. Process Guitar Geometry & Intersections
     const guitar = calculateGuitarFromMarkers(markers, markerPoses);
     
+    let activeFret = 0;
+    let activeString = 0;
+    
     if (guitar) {
       // Draw guitar overlay
       drawGuitarOnCanvas(ctx, guitar);
+      
+      // Calculate active fret/string if index tip is found
+      if (indexTipPos) {
+        const fretInfo = calculateFretAndStringFromGuitarMarkers(guitar.start, guitar.end, indexTipPos, true);
+        activeFret = fretInfo[0];
+        activeString = fretInfo[1];
+      }
     }
     
     // Draw ArUco marker boundaries and IDs
@@ -235,13 +329,81 @@ export default function ARCamera({
       ctx.font = '12px monospace';
       ctx.fillText(m.id, m.center.x - 4, m.center.y + 4);
     });
+
+    // Draw Hand skeleton and landmarks
+    if (handLandmarks && handLandmarks.length > 0) {
+      ctx.fillStyle = 'rgba(6, 182, 212, 0.9)'; // neon cyan joints
+      ctx.strokeStyle = 'rgba(6, 182, 212, 0.4)'; // bones
+      ctx.lineWidth = 3;
+      
+      handLandmarks.forEach(hand => {
+        hand.forEach(lm => {
+          ctx.beginPath();
+          ctx.arc(lm.x * width, lm.y * height, 4, 0, 2 * Math.PI);
+          ctx.fill();
+        });
+        
+        const drawPath = (indices) => {
+          ctx.beginPath();
+          ctx.moveTo(hand[indices[0]].x * width, hand[indices[0]].y * height);
+          for (let i = 1; i < indices.length; ++i) {
+            ctx.lineTo(hand[indices[i]].x * width, hand[indices[i]].y * height);
+          }
+          ctx.stroke();
+        };
+        
+        drawPath([0, 1, 2, 3, 4]);     // Thumb
+        drawPath([0, 5, 6, 7, 8]);     // Index
+        drawPath([0, 9, 10, 11, 12]);  // Middle
+        drawPath([0, 13, 14, 15, 16]); // Ring
+        drawPath([0, 17, 18, 19, 20]); // Pinky
+        drawPath([5, 9, 13, 17]);      // Knuckles
+      });
+    }
+    
+    // Draw index finger tip target ring if found
+    if (indexTipPos) {
+      ctx.strokeStyle = 'rgba(6, 182, 212, 0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(indexTipPos.x, indexTipPos.y, 12, 0, 2 * Math.PI);
+      ctx.stroke();
+      
+      ctx.fillStyle = 'rgba(6, 182, 212, 0.3)';
+      ctx.beginPath();
+      ctx.arc(indexTipPos.x, indexTipPos.y, 6, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+    
+    // Draw Fretboard overlay info text
+    if (activeFret > 0 && activeString > 0) {
+      ctx.fillStyle = 'rgba(6, 182, 212, 0.95)';
+      ctx.font = 'bold 18px monospace';
+      ctx.fillText(`FRET: ${activeFret} | STRING: ${activeString}`, 20, 40);
+    }
     
     // Update status label
-    const statusText = `FPS: ${currentFps} | Markers Tracked: ${detectedMarkers.length} | Mode: OpenCV Tracking`;
+    let statusText = `FPS: ${currentFps} | Markers Tracked: ${detectedMarkers.length} | Hand Tracker: ${mediaPipeLoaded ? 'Active' : 'Offline'}`;
+    if (activeFret > 0 && activeString > 0) {
+      statusText += ` | Active Fret: ${activeFret}, String: ${activeString}`;
+    }
     onStatusUpdate(statusText);
     
     loopRef.current = requestAnimationFrame(processFrame);
   };
+
+  // Start processing loop when camera and OpenCV.js are ready
+  useEffect(() => {
+    if (cameraActive && openCvLoaded) {
+      loopRef.current = requestAnimationFrame(processFrame);
+    }
+    return () => {
+      if (loopRef.current) {
+        cancelAnimationFrame(loopRef.current);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraActive, openCvLoaded]);
 
   // HTML5 Canvas 2D Fretboard Draw
   const drawGuitarOnCanvas = (ctx, guitar) => {
@@ -350,9 +512,10 @@ export default function ARCamera({
 
   // Cleanup on unmount
   useEffect(() => {
+    const videoNode = videoRef.current;
     return () => {
-      if (videoRef.current && videoRef.current.srcObject) {
-        const tracks = videoRef.current.srcObject.getTracks();
+      if (videoNode && videoNode.srcObject) {
+        const tracks = videoNode.srcObject.getTracks();
         tracks.forEach(track => track.stop());
       }
     };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import ARCamera from './components/ARCamera';
 import TestSuite from './components/TestSuite';
 import { Info } from 'lucide-react';
@@ -8,6 +8,7 @@ export default function App() {
   const [logs, setLogs] = useState([]);
   const [openCvLoaded, setOpenCvLoaded] = useState(!!window.cv);
   const [activeTab, setActiveTab] = useState('camera'); // 'camera' or 'testsuite'
+  const [mediaPipeLoaded, setMediaPipeLoaded] = useState(false);
 
   // Add log entry helper
   const addLog = (message) => {
@@ -18,8 +19,9 @@ export default function App() {
   // Listen for OpenCV.js ready event
   useEffect(() => {
     if (window.cv) {
-      setOpenCvLoaded(true);
-      addLog("OpenCV.js is already loaded.");
+      setTimeout(() => {
+        addLog("OpenCV.js is already loaded.");
+      }, 0);
       return;
     }
     
@@ -75,6 +77,9 @@ export default function App() {
           <span className={`status-pill ${openCvLoaded ? 'active' : 'inactive'}`}>
             OpenCV.js: {openCvLoaded ? 'READY' : 'LOADING'}
           </span>
+          <span className={`status-pill ${mediaPipeLoaded ? 'active' : 'inactive'}`}>
+            MediaPipe: {mediaPipeLoaded ? 'READY' : 'LOADING'}
+          </span>
         </div>
       </header>
       
@@ -88,6 +93,7 @@ export default function App() {
               <ARCamera 
                 openCvLoaded={openCvLoaded}
                 onStatusUpdate={(text) => setStatusText(text)}
+                onMediaPipeLoaded={setMediaPipeLoaded}
                 addLog={addLog}
               />
               

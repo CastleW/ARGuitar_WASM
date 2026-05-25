@@ -1,8 +1,7 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import { detectMarkers } from '../utils/aruco_detector';
 import { 
-  calculateGuitarFromMarkers, 
   calculateFretAndStringFromGuitarMarkers,
   createCameraMats,
   solvePose
@@ -52,7 +51,7 @@ export default function TestSuite({ openCvLoaded }) {
     setResults({ passed: 0, failed: 0, total: allTests.length });
     setCurrentTestName('Initializing image landmarker...');
 
-    let testLandmarker = null;
+    let testLandmarker;
     try {
       const vision = await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
@@ -112,8 +111,12 @@ export default function TestSuite({ openCvLoaded }) {
     }
 
     try {
-      testLandmarker.close();
-    } catch (e) {}
+      if (testLandmarker) {
+        testLandmarker.close();
+      }
+    } catch {
+      // Ignored
+    }
 
     setRunning(false);
     setCurrentTestName('Verification completed.');
