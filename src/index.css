@@ -1,0 +1,287 @@
+:root {
+  --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Harmonious Dark Palette */
+  --bg-primary: #08090f;
+  --bg-secondary: rgba(18, 20, 32, 0.7);
+  --bg-tertiary: rgba(30, 32, 50, 0.5);
+  
+  --text-primary: #f3f4f6;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
+
+  /* Neon Glow Accents */
+  --accent-purple: #a855f7;
+  --accent-cyan: #06b6d4;
+  --accent-green: #10b981;
+  --accent-red: #ef4444;
+  --accent-yellow: #eab308;
+  
+  --border-color: rgba(255, 255, 255, 0.08);
+  --border-glow: rgba(168, 85, 247, 0.2);
+
+  --shadow-premium: 0 10px 30px -10px rgba(0, 0, 0, 0.7), 
+                    0 1px 0 1px rgba(255, 255, 255, 0.05) inset;
+  
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+*, *::before, *::after {
+  box-sizing: inherit;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(168, 85, 247, 0.15) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(6, 182, 212, 0.1) 0px, transparent 50%);
+  background-attachment: fixed;
+}
+
+/* Scrollbar Customization */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-purple);
+}
+
+/* Premium Layout & Typography */
+h1, h2, h3, h4, h5, h6 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.title-gradient {
+  background: linear-gradient(135deg, #fff 30%, var(--accent-purple) 70%, var(--accent-cyan));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  display: inline-block;
+}
+
+/* Glassmorphism Panels */
+.glass-panel {
+  background: var(--bg-secondary);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  box-shadow: var(--shadow-premium);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.glass-panel:hover {
+  border-color: rgba(168, 85, 247, 0.25);
+  box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.8), 
+              0 0 15px -3px rgba(168, 85, 247, 0.15);
+}
+
+/* Button & Interactive styles */
+.btn-premium {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: linear-gradient(135deg, var(--accent-purple) 0%, rgba(139, 92, 246, 0.7) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+  padding: 10px 20px;
+  border-radius: 10px;
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 15px rgba(168, 85, 247, 0.2);
+}
+
+.btn-premium:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(168, 85, 247, 0.4);
+  background: linear-gradient(135deg, #b55fe6 0%, rgba(139, 92, 246, 0.9) 100%);
+}
+
+.btn-premium:active {
+  transform: translateY(0);
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 10px 20px;
+  border-radius: 10px;
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--accent-cyan);
+}
+
+.btn-secondary.active {
+  background: rgba(6, 182, 212, 0.2);
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 10px rgba(6, 182, 212, 0.2);
+}
+
+/* Guitar App Layout */
+.app-container {
+  display: grid;
+  grid-template-columns: 1fr 350px;
+  gap: 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px;
+  min-height: calc(100vh - 80px);
+}
+
+@media (max-width: 1024px) {
+  .app-container {
+    grid-template-columns: 1fr;
+  }
+}
+
+.camera-container {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4/3;
+  overflow: hidden;
+  border-radius: 16px;
+  background: #000;
+  border: 1px solid var(--border-color);
+}
+
+.camera-feed {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1); /* Mirror camera feed */
+}
+
+.overlay-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10;
+  transform: scaleX(-1); /* Mirror to match camera feed */
+}
+
+/* Status overlays */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.status-pill.active {
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.1);
+}
+
+.status-pill.inactive {
+  border-color: var(--accent-red);
+  color: var(--accent-red);
+}
+
+.status-pill.warning {
+  border-color: var(--accent-yellow);
+  color: var(--accent-yellow);
+}
+
+/* Sidebar Info Blocks */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.info-card {
+  padding: 20px;
+}
+
+.chord-badge {
+  font-size: 48px;
+  font-weight: 700;
+  color: #fff;
+  text-align: center;
+  margin: 16px 0;
+  font-family: var(--font-mono);
+  text-shadow: 0 0 20px rgba(168, 85, 247, 0.6);
+  animation: pulse 2s infinite alternate;
+}
+
+.chord-badge.no-chord {
+  color: var(--text-muted);
+  text-shadow: none;
+  animation: none;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); text-shadow: 0 0 15px rgba(168, 85, 247, 0.4); }
+  100% { transform: scale(1.05); text-shadow: 0 0 25px rgba(168, 85, 247, 0.8), 0 0 10px rgba(6, 182, 212, 0.5); }
+}
+
+.fret-indicator {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  margin-top: 10px;
+}
+
+.fret-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 6px;
+  border-left: 3px solid transparent;
+}
+
+.fret-row.active {
+  border-left-color: var(--accent-cyan);
+  background: rgba(6, 182, 212, 0.08);
+}
+
+/* Micro-animations */
+.glow-on-hover:hover {
+  filter: drop-shadow(0 0 8px rgba(168, 85, 247, 0.5));
+}
