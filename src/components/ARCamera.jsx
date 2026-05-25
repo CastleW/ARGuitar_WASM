@@ -85,12 +85,18 @@ export default function ARCamera({
     async function initMediaPipe() {
       try {
         console.log("Loading MediaPipe Landmarker in ARCamera...");
-        if (addLog) addLog("Loading MediaPipe Hand Landmarker...");
+        if (addLog) addLog("MediaPipe Init: Starting...");
         
+        console.log("MediaPipe Init: Resolving fileset vision tasks...");
+        if (addLog) addLog("MediaPipe Init: Resolving fileset vision tasks...");
         const vision = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm"
         );
+        console.log("MediaPipe Init: Fileset resolver ready!");
+        if (addLog) addLog("MediaPipe Init: Fileset resolver ready!");
         
+        console.log("MediaPipe Init: Creating HandLandmarker instance...");
+        if (addLog) addLog("MediaPipe Init: Creating HandLandmarker instance...");
         const landmarker = await HandLandmarker.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
@@ -102,13 +108,15 @@ export default function ARCamera({
           minHandPresenceConfidence: 0.5,
           minTrackingConfidence: 0.5
         });
+        console.log("MediaPipe Init: HandLandmarker instance created!");
+        if (addLog) addLog("MediaPipe Init: HandLandmarker instance created!");
         
         if (active) {
           landmarkerRef.current = landmarker;
           setMediaPipeLoaded(true);
           if (onMediaPipeLoaded) onMediaPipeLoaded(true);
           console.log("MediaPipe Hand Landmarker loaded successfully!");
-          if (addLog) addLog("MediaPipe Hand Landmarker loaded successfully!");
+          if (addLog) addLog("MediaPipe: READY!");
         } else {
           landmarker.close();
         }
