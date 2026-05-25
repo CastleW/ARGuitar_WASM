@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
+import { HandLandmarker } from '@mediapipe/tasks-vision';
 import { detectMarkers } from '../utils/aruco_detector';
 import { 
   calculateFretAndStringFromGuitarMarkers,
@@ -53,12 +53,21 @@ export default function TestSuite({ openCvLoaded }) {
 
     let testLandmarker;
     try {
-      const vision = await FilesetResolver.forVisionTasks(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm"
-      );
+      const supportsSimd = (() => {
+        try {
+          return WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11]));
+        } catch {
+          return false;
+        }
+      })();
+      const suffix = supportsSimd ? "vision_wasm_internal" : "vision_wasm_nosimd_internal";
+      const vision = {
+        wasmLoaderPath: window.location.origin + "/wasm/" + suffix + ".js",
+        wasmBinaryPath: window.location.origin + "/wasm/" + suffix + ".wasm"
+      };
       testLandmarker = await HandLandmarker.createFromOptions(vision, {
         baseOptions: {
-          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+          modelAssetPath: window.location.origin + "/hand_landmarker.task",
           delegate: "CPU"
         },
         runningMode: "IMAGE",
