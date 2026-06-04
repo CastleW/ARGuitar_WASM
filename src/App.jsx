@@ -105,9 +105,23 @@ export default function App() {
               />
               
               {/* Diagnostic Metrics and Text */}
-              <div className="glass-panel" style={{ padding: '16px', fontSize: '14px', fontFamily: 'monospace', display: 'flex', gap: '12px', alignItems: 'center' }}>
-                <Info size={16} style={{ color: 'var(--accent-cyan)' }} />
-                <span>{statusText}</span>
+              <div className="glass-panel" style={{ 
+                padding: '16px', 
+                fontSize: '14px', 
+                fontFamily: 'monospace', 
+                display: 'flex', 
+                gap: '12px', 
+                alignItems: 'center',
+                height: '54px',
+                boxSizing: 'border-box'
+              }}>
+                <Info size={16} style={{ flexShrink: 0, color: 'var(--accent-cyan)' }} />
+                <span style={{
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  width: '100%'
+                }}>{statusText}</span>
               </div>
             </>
           ) : (
@@ -150,7 +164,7 @@ export default function App() {
               System Logs
             </h3>
             <div style={{
-              flexGrow: 1,
+              height: '240px',
               overflowY: 'auto',
               background: 'rgba(0, 0, 0, 0.3)',
               borderRadius: '8px',
@@ -160,8 +174,7 @@ export default function App() {
               color: '#d1d5db',
               display: 'flex',
               flexDirection: 'column',
-              gap: '4px',
-              maxHeight: '280px'
+              gap: '4px'
             }}>
               {logs.length === 0 ? (
                 <div style={{ color: 'var(--text-muted)' }}>Waiting for system logs...</div>
