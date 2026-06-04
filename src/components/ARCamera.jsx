@@ -11,6 +11,32 @@ import {
   TOTAL_FRET_LENGTH_IN_CM
 } from '../utils/guitar_math';
 
+// Helper to draw text un-mirrored on a mirrored canvas context
+const drawUnmirroredText = (ctx, text, x, y, options = {}) => {
+  const {
+    font = '12px monospace',
+    fillStyle = '#fff',
+    align = 'center',
+    baseline = 'middle'
+  } = options;
+  
+  ctx.save();
+  ctx.font = font;
+  ctx.fillStyle = fillStyle;
+  ctx.textAlign = align;
+  ctx.textBaseline = baseline;
+  
+  // Translate to the target coordinate
+  ctx.translate(x, y);
+  // Mirror horizontally
+  ctx.scale(-1, 1);
+  
+  // Draw text at origin
+  ctx.fillText(text, 0, 0);
+  
+  ctx.restore();
+};
+
 export default function ARCamera({
   openCvLoaded,
   onStatusUpdate,
@@ -20,6 +46,7 @@ export default function ARCamera({
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const processingCanvasRef = useRef(null);
+  const hudRef = useRef(null);
   
   const [cameraActive, setCameraActive] = useState(false);
   const [mediaPipeLoaded, setMediaPipeLoaded] = useState(false);
@@ -74,6 +101,11 @@ export default function ARCamera({
       if (loopRef.current) {
         cancelAnimationFrame(loopRef.current);
         loopRef.current = null;
+      }
+      
+      // Clear HUD
+      if (hudRef.current) {
+        hudRef.current.style.display = 'none';
       }
       
       if (addLog) addLog("Camera stopped.");
@@ -361,10 +393,13 @@ export default function ARCamera({
       ctx.closePath();
       ctx.stroke();
       
-      // Draw ID
-      ctx.fillStyle = '#fff';
-      ctx.font = '12px monospace';
-      ctx.fillText(m.id, m.center.x - 4, m.center.y + 4);
+      // Draw ID un-mirrored
+      drawUnmirroredText(ctx, m.id.toString(), m.center.x, m.center.y, {
+        font: '12px monospace',
+        fillStyle: '#fff',
+        align: 'center',
+        baseline: 'middle'
+      });
     });
 
     // Draw Hand skeleton and landmarks
@@ -412,11 +447,16 @@ export default function ARCamera({
       ctx.fill();
     }
     
-    // Draw Fretboard overlay info text
+    // Update Fretboard overlay info text in the DOM HUD
     if (activeFret > 0 && activeString > 0) {
-      ctx.fillStyle = 'rgba(6, 182, 212, 0.95)';
-      ctx.font = 'bold 18px monospace';
-      ctx.fillText(`FRET: ${activeFret} | STRING: ${activeString}`, 20, 40);
+      if (hudRef.current) {
+        hudRef.current.textContent = `FRET: ${activeFret} | STRING: ${activeString}`;
+        hudRef.current.style.display = 'block';
+      }
+    } else {
+      if (hudRef.current) {
+        hudRef.current.style.display = 'none';
+      }
     }
     
     // Update status label
@@ -502,12 +542,15 @@ export default function ARCamera({
       ctx.lineTo(x2, y2);
       ctx.stroke();
       
-      // Draw Fret Number Label
+      // Draw Fret Number Label un-mirrored
       if (fretDist > 0) {
-        ctx.fillStyle = "rgba(156, 163, 175, 0.8)";
-        ctx.font = "9px monospace";
         const idx = FRET_ABSOLUTE_DISTANCES_FROM_NUT.indexOf(fretDist) + 1;
-        ctx.fillText(idx.toString(), fx - 4, fy - fWidth / 2 - 4);
+        drawUnmirroredText(ctx, idx.toString(), fx, fy - fWidth / 2 - 6, {
+          font: '9px monospace',
+          fillStyle: 'rgba(156, 163, 175, 0.8)',
+          align: 'center',
+          baseline: 'bottom'
+        });
       }
     });
     
@@ -580,6 +623,28 @@ export default function ARCamera({
       <canvas
         ref={processingCanvasRef}
         style={{ display: 'none' }}
+      />
+      
+      {/* Active Fret/String HUD Overlay */}
+      <div 
+        ref={hudRef}
+        style={{
+          position: 'absolute',
+          top: '16px',
+          right: '16px',
+          zIndex: 20,
+          background: 'rgba(8, 9, 15, 0.85)',
+          backdropFilter: 'blur(4px)',
+          border: '1px solid var(--accent-cyan)',
+          borderRadius: '8px',
+          padding: '6px 12px',
+          fontFamily: 'var(--font-mono)',
+          fontSize: '14px',
+          fontWeight: 'bold',
+          color: 'var(--accent-cyan)',
+          boxShadow: '0 0 10px rgba(6, 182, 212, 0.3)',
+          display: 'none'
+        }}
       />
       
       {/* Controls Overlay */}

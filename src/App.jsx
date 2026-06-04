@@ -87,7 +87,14 @@ export default function App() {
       <main className="app-container">
         
         {/* Left Side: Video stream or Test Suite */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div style={{ 
+          display: 'flex', 
+          flexDirection: 'column', 
+          gap: '16px',
+          width: '100%',
+          maxWidth: activeTab === 'camera' ? '800px' : 'none',
+          margin: activeTab === 'camera' ? '0 auto' : '0'
+        }}>
           {activeTab === 'camera' ? (
             <>
               <ARCamera 

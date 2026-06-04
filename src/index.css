@@ -168,11 +168,13 @@ h1, h2, h3, h4, h5, h6 {
 .camera-container {
   position: relative;
   width: 100%;
+  max-width: 800px;
   aspect-ratio: 4/3;
   overflow: hidden;
   border-radius: 16px;
   background: #000;
   border: 1px solid var(--border-color);
+  margin: 0 auto;
 }
 
 .camera-feed {
