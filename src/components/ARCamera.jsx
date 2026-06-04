@@ -225,12 +225,14 @@ export default function ARCamera({
     const width = video.videoWidth;
     const height = video.videoHeight;
     
-    // Set sizes
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width;
-      canvas.height = height;
-      procCanvas.width = width;
-      procCanvas.height = height;
+    // Set sizes (only if valid)
+    if (width > 0 && height > 0) {
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+        procCanvas.width = width;
+        procCanvas.height = height;
+      }
     }
     
     const ctx = canvas.getContext('2d');

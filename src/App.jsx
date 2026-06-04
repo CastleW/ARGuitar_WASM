@@ -166,6 +166,9 @@ export default function App() {
             <div style={{
               height: '240px',
               overflowY: 'auto',
+              overflowX: 'hidden',
+              wordBreak: 'break-word',
+              whiteSpace: 'pre-wrap',
               background: 'rgba(0, 0, 0, 0.3)',
               borderRadius: '8px',
               padding: '10px',
