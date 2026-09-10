@@ -16,22 +16,34 @@ export default function App() {
     setLogs(prev => [{ time: timestamp, msg: message }, ...prev].slice(0, 15));
   };
 
-  // Listen for OpenCV.js ready event
+  // Listen for OpenCV.js and MediaPipe ready events
   useEffect(() => {
     if (window.cv) {
+      setOpenCvLoaded(true);
       setTimeout(() => {
         addLog("OpenCV.js is already loaded.");
       }, 0);
-      return;
+    } else {
+      const handleCvReady = () => {
+        setOpenCvLoaded(true);
+        addLog("OpenCV.js loaded successfully!");
+      };
+      window.addEventListener('opencv-ready', handleCvReady);
+      return () => window.removeEventListener('opencv-ready', handleCvReady);
     }
-    
-    const handleCvReady = () => {
-      setOpenCvLoaded(true);
-      addLog("OpenCV.js loaded successfully!");
-    };
-    
-    window.addEventListener('opencv-ready', handleCvReady);
-    return () => window.removeEventListener('opencv-ready', handleCvReady);
+  }, []);
+
+  useEffect(() => {
+    if (window.FilesetResolver && window.HandLandmarker) {
+      setMediaPipeLoaded(true);
+    } else {
+      const handleMpReady = () => {
+        setMediaPipeLoaded(true);
+        addLog("MediaPipe loaded globally!");
+      };
+      window.addEventListener('mediapipe-ready', handleMpReady);
+      return () => window.removeEventListener('mediapipe-ready', handleMpReady);
+    }
   }, []);
 
   return (
@@ -56,14 +68,14 @@ export default function App() {
 
         {/* Tab selection */}
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button 
+          <button
             className={`btn-secondary ${activeTab === 'camera' ? 'active' : ''}`}
             onClick={() => setActiveTab('camera')}
             style={{ padding: '8px 16px', fontSize: '13px' }}
           >
             Live Camera
           </button>
-          <button 
+          <button
             className={`btn-secondary ${activeTab === 'testsuite' ? 'active' : ''}`}
             onClick={() => setActiveTab('testsuite')}
             style={{ padding: '8px 16px', fontSize: '13px' }}
@@ -71,7 +83,7 @@ export default function App() {
             Test Suite
           </button>
         </div>
-        
+
         {/* Device Status Pills */}
         <div style={{ display: 'flex', gap: '12px' }}>
           <span className={`status-pill ${openCvLoaded ? 'active' : 'inactive'}`}>
@@ -82,35 +94,37 @@ export default function App() {
           </span>
         </div>
       </header>
-      
+
       {/* Main workspace container */}
       <main className="app-container">
-        
+
         {/* Left Side: Video stream or Test Suite */}
-        <div style={{ 
-          display: 'flex', 
-          flexDirection: 'column', 
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
           gap: '16px',
           width: '100%',
+          minWidth: 0,
           maxWidth: activeTab === 'camera' ? '800px' : 'none',
           margin: activeTab === 'camera' ? '0 auto' : '0'
         }}>
           {activeTab === 'camera' ? (
             <>
-              <ARCamera 
+              <ARCamera
                 openCvLoaded={openCvLoaded}
                 onStatusUpdate={(text) => setStatusText(text)}
                 onMediaPipeLoaded={setMediaPipeLoaded}
                 addLog={addLog}
               />
-              
+
               {/* Diagnostic Metrics and Text */}
-              <div className="glass-panel" style={{ 
-                padding: '16px', 
-                fontSize: '14px', 
-                fontFamily: 'monospace', 
-                display: 'flex', 
-                gap: '12px', 
+              <div className="glass-panel" style={{
+                padding: '16px',
+                minWidth: 0,
+                fontSize: '14px',
+                fontFamily: 'monospace',
+                display: 'flex',
+                gap: '12px',
                 alignItems: 'center',
                 height: '54px',
                 boxSizing: 'border-box'
@@ -128,10 +142,10 @@ export default function App() {
             <TestSuite openCvLoaded={openCvLoaded} />
           )}
         </div>
-        
+
         {/* Right Side: Control panel / Info card and logs */}
         <div className="sidebar">
-          
+
           {/* Instructions Panel */}
           <div className="glass-panel info-card" style={{ padding: '20px' }}>
             <h3 style={{ fontSize: '14px', textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '0.05em', marginTop: 0, marginBottom: '12px' }}>
@@ -190,7 +204,7 @@ export default function App() {
               )}
             </div>
           </div>
-          
+
         </div>
       </main>
     </div>

@@ -7,7 +7,7 @@
   --bg-primary: #08090f;
   --bg-secondary: rgba(18, 20, 32, 0.7);
   --bg-tertiary: rgba(30, 32, 50, 0.5);
-  
+
   --text-primary: #f3f4f6;
   --text-secondary: #9ca3af;
   --text-muted: #6b7280;
@@ -18,13 +18,13 @@
   --accent-green: #10b981;
   --accent-red: #ef4444;
   --accent-yellow: #eab308;
-  
+
   --border-color: rgba(255, 255, 255, 0.08);
   --border-glow: rgba(168, 85, 247, 0.2);
 
-  --shadow-premium: 0 10px 30px -10px rgba(0, 0, 0, 0.7), 
-                    0 1px 0 1px rgba(255, 255, 255, 0.05) inset;
-  
+  --shadow-premium: 0 10px 30px -10px rgba(138, 79, 79, 0.7),
+    0 1px 0 1px rgba(255, 255, 255, 0.05) inset;
+
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-sans);
@@ -35,7 +35,9 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: inherit;
 }
 
@@ -43,7 +45,7 @@ body {
   margin: 0;
   padding: 0;
   overflow-x: hidden;
-  background-image: 
+  background-image:
     radial-gradient(at 0% 0%, rgba(168, 85, 247, 0.15) 0px, transparent 50%),
     radial-gradient(at 100% 100%, rgba(6, 182, 212, 0.1) 0px, transparent 50%);
   background-attachment: fixed;
@@ -54,19 +56,27 @@ body {
   width: 8px;
   height: 8px;
 }
+
 ::-webkit-scrollbar-track {
   background: var(--bg-primary);
 }
+
 ::-webkit-scrollbar-thumb {
   background: var(--bg-tertiary);
   border-radius: 4px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: var(--accent-purple);
 }
 
 /* Premium Layout & Typography */
-h1, h2, h3, h4, h5, h6 {
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
   margin: 0;
   font-weight: 600;
   letter-spacing: -0.02em;
@@ -92,8 +102,8 @@ h1, h2, h3, h4, h5, h6 {
 
 .glass-panel:hover {
   border-color: rgba(168, 85, 247, 0.25);
-  box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.8), 
-              0 0 15px -3px rgba(168, 85, 247, 0.15);
+  box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.8),
+    0 0 15px -3px rgba(168, 85, 247, 0.15);
 }
 
 /* Button & Interactive styles */
@@ -152,7 +162,7 @@ h1, h2, h3, h4, h5, h6 {
 /* Guitar App Layout */
 .app-container {
   display: grid;
-  grid-template-columns: 1fr 350px;
+  grid-template-columns: minmax(0, 1fr) 350px;
   gap: 24px;
   max-width: 1400px;
   margin: 0 auto;
@@ -185,7 +195,8 @@ h1, h2, h3, h4, h5, h6 {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transform: scaleX(-1); /* Mirror camera feed */
+  transform: scaleX(-1);
+  /* Mirror camera feed */
 }
 
 .overlay-canvas {
@@ -196,7 +207,8 @@ h1, h2, h3, h4, h5, h6 {
   height: 100%;
   pointer-events: none;
   z-index: 10;
-  transform: scaleX(-1); /* Mirror to match camera feed */
+  transform: scaleX(-1);
+  /* Mirror to match camera feed */
 }
 
 /* Status overlays */
@@ -258,8 +270,15 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 @keyframes pulse {
-  0% { transform: scale(1); text-shadow: 0 0 15px rgba(168, 85, 247, 0.4); }
-  100% { transform: scale(1.05); text-shadow: 0 0 25px rgba(168, 85, 247, 0.8), 0 0 10px rgba(6, 182, 212, 0.5); }
+  0% {
+    transform: scale(1);
+    text-shadow: 0 0 15px rgba(168, 85, 247, 0.4);
+  }
+
+  100% {
+    transform: scale(1.05);
+    text-shadow: 0 0 25px rgba(168, 85, 247, 0.8), 0 0 10px rgba(6, 182, 212, 0.5);
+  }
 }
 
 .fret-indicator {

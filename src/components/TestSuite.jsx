@@ -43,7 +43,7 @@ export default function TestSuite({ openCvLoaded }) {
   const allTests = [...fretTests, ...stringTests];
 
   const runAllTests = async () => {
-    if (!openCvLoaded) {
+    if (!openCvLoaded && !window.cv) {
       alert("OpenCV.js must be fully loaded before running tests.");
       return;
     }
@@ -218,47 +218,31 @@ export default function TestSuite({ openCvLoaded }) {
             fretHandLandmarks = mpResults.landmarks[0];
           }
           
-          // Get Index Finger Tip (landmark index 8)
-          const indexTip = fretHandLandmarks[8];
+          // Get Index Finger contact point on the string (pad between DIP joint 7 and tip 8)
+          const tip = fretHandLandmarks[8];
+          const dip = fretHandLandmarks[7] || tip;
           const indexTipPos = {
-            x: indexTip.x * img.width,
-            y: indexTip.y * img.height
+            x: (tip.x * 0.75 + dip.x * 0.25) * img.width,
+            y: (tip.y * 0.75 + dip.y * 0.25) * img.height
           };
           
-          // 4. Calculate guitar starting points
-          const guitarStart = markers[1]?.center;
-          const guitarEnd = markers[5]?.center;
-          
-          if (!guitarStart || !guitarEnd) {
+          // 4. Check that at least 2 guitar markers are detected
+          if (Object.keys(markers).length < 2) {
             resolve({
               ...test,
               status: 'FAIL',
-              error: `Guitar markers missing. Detected IDs: ${Object.keys(markers).join(', ') || 'none'}`,
+              error: `Insufficient guitar markers. Detected IDs: ${Object.keys(markers).join(', ') || 'none'}`,
               detectedFret: 'N/A',
               detectedString: 'N/A'
             });
             return;
           }
           
-          // Calculate fret and string
-          const fretInfo = calculateFretAndStringFromGuitarMarkers(guitarStart, guitarEnd, indexTipPos, true);
+          // Calculate fret and string using piecewise marker interpolation
+          const fretInfo = calculateFretAndStringFromGuitarMarkers(markers, null, indexTipPos, true);
           const detectedFret = fretInfo[0];
           const detectedString = fretInfo[1];
-          
-          // Calculate fretLocator for diagnostics
-          const p1 = guitarStart, p2 = guitarEnd, p3 = indexTipPos;
-          const a = p2.y - p1.y;
-          const b = p1.x - p2.x;
-          const c = p2.x * p1.y - p1.x * p2.y;
-          const denom = a*a + b*b;
-          let ix = p1.x, iy = p1.y;
-          if (denom !== 0) {
-            ix = ((b*b * p3.x) - (a * b * p3.y) - (a * c)) / denom;
-            iy = ((a*a * p3.y) - (a * b * p3.x) - (b * c)) / denom;
-          }
-          const distFromStart = Math.sqrt((ix - p1.x)**2 + (iy - p1.y)**2);
-          const guitarLength = Math.sqrt((p2.x - p1.x)**2 + (p2.y - p1.y)**2);
-          const fretLocator = distFromStart * TOTAL_FRET_LENGTH_IN_CM / (guitarLength || 1);
+          const fretLocator = fretInfo[2] !== undefined ? fretInfo[2] : 0;
           
           const expectedRangeLower = test.expectedFret === 1 ? 0.0 : FRET_ABSOLUTE_DISTANCES_FROM_NUT[test.expectedFret - 2];
           const expectedRangeUpper = FRET_ABSOLUTE_DISTANCES_FROM_NUT[test.expectedFret - 1];
