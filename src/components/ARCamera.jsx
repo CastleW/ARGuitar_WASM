@@ -14,6 +14,7 @@ import {
   TOTAL_FRET_LENGTH_IN_CM,
   ARUCO_MARKER_MAP
 } from '../utils/guitar_math';
+import { detectChordFromFingers, createChordSmoother } from '../utils/chord_detector';
 
 // Helper to draw text un-mirrored on a mirrored canvas context
 const drawUnmirroredText = (ctx, text, x, y, options = {}) => {
@@ -40,6 +41,15 @@ const drawUnmirroredText = (ctx, text, x, y, options = {}) => {
 
   ctx.restore();
 };
+
+// Configuration for all 5 fingers of the fretting hand
+export const FRET_FINGERS = [
+  { id: 'thumb',  name: 'Thumb',  num: 'T', tipIdx: 4,  dipIdx: 3,  color: '#f59e0b', ringColor: 'rgba(245, 158, 11, 0.95)', path: [0, 1, 2, 3, 4] },
+  { id: 'index',  name: 'Index',  num: '1', tipIdx: 8,  dipIdx: 7,  color: '#38bdf8', ringColor: 'rgba(56, 189, 248, 0.95)', path: [0, 5, 6, 7, 8] },
+  { id: 'middle', name: 'Middle', num: '2', tipIdx: 12, dipIdx: 11, color: '#22c55e', ringColor: 'rgba(34, 197, 94, 0.95)', path: [0, 9, 10, 11, 12] },
+  { id: 'ring',   name: 'Ring',   num: '3', tipIdx: 16, dipIdx: 15, color: '#a855f7', ringColor: 'rgba(168, 85, 247, 0.95)', path: [0, 13, 14, 15, 16] },
+  { id: 'pinky',  name: 'Pinky',  num: '4', tipIdx: 20, dipIdx: 19, color: '#ec4899', ringColor: 'rgba(236, 72, 153, 0.95)', path: [0, 17, 18, 19, 20] }
+];
 
 export default function ARCamera({
   openCvLoaded,
@@ -126,6 +136,16 @@ export default function ARCamera({
   const lastLoggedIdsRef = useRef("");
   const lastDiagTimeRef = useRef(0);
 
+  // Strumming and picking tracking refs
+  const lastStrumStateRef = useRef({ time: 0, s: null, inZone: false });
+  const vibratingStringsRef = useRef({});
+  const pickTrailRef = useRef([]);
+  const activeStrumDisplayRef = useRef({ text: '', time: 0, color: '#f59e0b' });
+
+  // Chord detection refs
+  const chordSmootherRef = useRef(createChordSmoother(5, 320));
+  const activeChordRef = useRef(null);
+
   // Start webcam feed
   const startCamera = async () => {
     try {
@@ -171,10 +191,12 @@ export default function ARCamera({
         loopRef.current = null;
       }
 
-      // Clear HUD
+      // Clear HUD and Chord state
       if (hudRef.current) {
         hudRef.current.style.display = 'none';
       }
+      chordSmootherRef.current.reset();
+      activeChordRef.current = null;
 
       if (addLog) addLog("Camera stopped.");
       if (onStatusUpdate) {
@@ -397,46 +419,216 @@ export default function ARCamera({
     // Clear display canvas
     ctx.clearRect(0, 0, width, height);
 
-    // Find fretting hand tip (landmark index 8 is index finger tip)
-    let fretHandLandmarks = null;
-    let indexTipPos = null;
-    if (handLandmarks && handLandmarks.length > 0) {
-      handLandmarks.forEach((hand, idx) => {
-        const handedness = handLandmarksResults.handednesses[idx]?.[0];
-        if (handedness && handedness.categoryName !== 'Right') {
-          fretHandLandmarks = hand;
-        }
-      });
-      if (!fretHandLandmarks) {
-        fretHandLandmarks = handLandmarks[0]; // Fallback to first hand
-      }
+    // 2. Process Guitar Geometry
+    const neckGeometry = getNeckGeometry(markers, neckWidthScaleRef.current, markerPoses, fretScaleLengthRef.current);
 
-      if (fretHandLandmarks) {
-        const tip = fretHandLandmarks[8];
-        const dip = fretHandLandmarks[7] || tip;
-        indexTipPos = {
-          x: (tip.x * 0.75 + dip.x * 0.25) * width,
-          y: (tip.y * 0.75 + dip.y * 0.25) * height
-        };
+    if (neckGeometry) {
+      // Draw guitar frets, strum zone, and extended vibrating strings
+      drawGuitarOnCanvas(ctx, neckGeometry);
+    }
+
+    // 3. Separate Fretting Hand (Left) and Strumming Hand (Right)
+    let fretHandLandmarks = null;
+    let strumHandLandmarks = null;
+
+    if (handLandmarks && handLandmarks.length > 0) {
+      if (handLandmarks.length === 1) {
+        // If 1 hand, classify by position along guitar axis if geometry is known
+        if (neckGeometry && neckGeometry.len > 0) {
+          const hx = handLandmarks[0][0].x * width;
+          const hy = handLandmarks[0][0].y * height;
+          const t = ((hx - neckGeometry.start.x) * neckGeometry.dx + (hy - neckGeometry.start.y) * neckGeometry.dy) / (neckGeometry.len * neckGeometry.len);
+          if (t > 0.82) {
+            strumHandLandmarks = handLandmarks[0];
+          } else {
+            fretHandLandmarks = handLandmarks[0];
+          }
+        } else {
+          fretHandLandmarks = handLandmarks[0];
+        }
+      } else {
+        // 2 hands: Sort along the guitar axis so hand closer to body is strum hand
+        if (neckGeometry && neckGeometry.len > 0) {
+          const t0 = (((handLandmarks[0][0].x * width) - neckGeometry.start.x) * neckGeometry.dx + ((handLandmarks[0][0].y * height) - neckGeometry.start.y) * neckGeometry.dy) / (neckGeometry.len * neckGeometry.len);
+          const t1 = (((handLandmarks[1][0].x * width) - neckGeometry.start.x) * neckGeometry.dx + ((handLandmarks[1][0].y * height) - neckGeometry.start.y) * neckGeometry.dy) / (neckGeometry.len * neckGeometry.len);
+          if (t0 < t1) {
+            fretHandLandmarks = handLandmarks[0];
+            strumHandLandmarks = handLandmarks[1];
+          } else {
+            fretHandLandmarks = handLandmarks[1];
+            strumHandLandmarks = handLandmarks[0];
+          }
+        } else {
+          handLandmarks.forEach((hand, idx) => {
+            const cat = handLandmarksResults?.handednesses?.[idx]?.[0]?.categoryName;
+            if (cat === 'Right') strumHandLandmarks = hand;
+            else fretHandLandmarks = hand;
+          });
+        }
       }
     }
 
-    // 3. Process Guitar Geometry & Intersections (Unified Geometry)
-    const neckGeometry = getNeckGeometry(markers, neckWidthScaleRef.current, markerPoses, fretScaleLengthRef.current);
+    // 4. Calculate positions and fret/string for all 5 fingers of the fretting hand
+    const trackedFingers = [];
+    if (fretHandLandmarks) {
+      FRET_FINGERS.forEach(cfg => {
+        const tip = fretHandLandmarks[cfg.tipIdx];
+        const dip = fretHandLandmarks[cfg.dipIdx] || tip;
+        if (tip) {
+          const pos = {
+            x: (tip.x * 0.75 + dip.x * 0.25) * width,
+            y: (tip.y * 0.75 + dip.y * 0.25) * height
+          };
 
-    let activeFret = 0;
-    let activeString = 0;
+          let fret = 0;
+          let string = 0;
+          let fretLocator = 0;
 
-    if (neckGeometry) {
-      // Draw guitar overlay using unified geometry
-      drawGuitarOnCanvas(ctx, neckGeometry);
+          if (neckGeometry) {
+            const fretInfo = calculateFretAndStringFromGeometry(neckGeometry, pos, true);
+            fret = fretInfo[0];
+            string = fretInfo[1];
+            fretLocator = fretInfo[2];
+          }
 
-      // Calculate active fret/string using the exact same unified geometry
-      if (indexTipPos) {
-        const fretInfo = calculateFretAndStringFromGeometry(neckGeometry, indexTipPos, true);
-        activeFret = fretInfo[0];
-        activeString = fretInfo[1];
+          trackedFingers.push({
+            ...cfg,
+            pos,
+            fret,
+            string,
+            fretLocator,
+            isActive: fret > 0 && string > 0
+          });
+        }
+      });
+    }
+
+    // 5. Detect Left-Hand Major / Minor Chord
+    const rawChord = detectChordFromFingers(trackedFingers);
+    const activeChord = chordSmootherRef.current.update(rawChord, timestamp);
+    activeChordRef.current = activeChord;
+
+    // 6. Track Strumming / Picking Hand (Right Hand)
+    let strumStatusDesc = '';
+    if (strumHandLandmarks && neckGeometry) {
+      const thumbTip = strumHandLandmarks[4];
+      const indexTip = strumHandLandmarks[8];
+      let pickX = 0, pickY = 0;
+
+      if (thumbTip && indexTip) {
+        pickX = ((thumbTip.x + indexTip.x) / 2) * width;
+        pickY = ((thumbTip.y + indexTip.y) / 2) * height;
+      } else if (indexTip) {
+        pickX = indexTip.x * width;
+        pickY = indexTip.y * height;
+      } else if (thumbTip) {
+        pickX = thumbTip.x * width;
+        pickY = thumbTip.y * height;
       }
+
+      // Add to pick motion trail
+      pickTrailRef.current.push({ x: pickX, y: pickY, time: timestamp });
+      if (pickTrailRef.current.length > 8) {
+        pickTrailRef.current.shift();
+      }
+
+      // Draw pick motion trail
+      if (pickTrailRef.current.length > 1) {
+        ctx.save();
+        for (let i = 1; i < pickTrailRef.current.length; i++) {
+          const pt1 = pickTrailRef.current[i - 1];
+          const pt2 = pickTrailRef.current[i];
+          const alpha = (i / pickTrailRef.current.length) * 0.7;
+          ctx.strokeStyle = `rgba(245, 158, 11, ${alpha})`;
+          ctx.lineWidth = i * 0.9;
+          ctx.beginPath();
+          ctx.moveTo(pt1.x, pt1.y);
+          ctx.lineTo(pt2.x, pt2.y);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // Project pick position onto guitar axis
+      const { start, dx, dy, len, perpX, perpY, nutNeckWidth, endNeckWidth } = neckGeometry;
+      const tPick = ((pickX - start.x) * dx + (pickY - start.y) * dy) / (len * len);
+      const cx = start.x + tPick * dx;
+      const cy = start.y + tPick * dy;
+      const lateralDist = (pickX - cx) * perpX + (pickY - cy) * perpY;
+      const localWidth = nutNeckWidth + tPick * (endNeckWidth - nutNeckWidth);
+      const stringSpread = localWidth * 0.88;
+      const sPick = ((lateralDist / (stringSpread || 1)) + 0.5) * 5 + 1; // 1.0 (High E) to 6.0 (Low E)
+
+      const inStrumZone = (tPick >= 0.88 && tPick <= 1.45 && sPick >= 0.2 && sPick <= 6.8);
+
+      // Draw Pick Cursor (Amber Plectrum / Target)
+      ctx.save();
+      ctx.shadowColor = inStrumZone ? '#f59e0b' : 'rgba(255,255,255,0.4)';
+      ctx.shadowBlur = inStrumZone ? 16 : 6;
+      ctx.fillStyle = inStrumZone ? 'rgba(245, 158, 11, 0.95)' : 'rgba(255, 255, 255, 0.7)';
+      ctx.beginPath();
+      ctx.arc(pickX, pickY, inStrumZone ? 8 : 5, 0, 2 * Math.PI);
+      ctx.fill();
+
+      // Outer targeting crosshair
+      ctx.strokeStyle = inStrumZone ? '#f59e0b' : 'rgba(255, 255, 255, 0.5)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(pickX, pickY, inStrumZone ? 14 : 9, 0, 2 * Math.PI);
+      ctx.stroke();
+
+      drawUnmirroredText(ctx, inStrumZone ? '⚡ PICK' : 'R-HAND', pickX, pickY - 18, {
+        font: 'bold 11px monospace',
+        fillStyle: inStrumZone ? '#f59e0b' : '#ffffff',
+        align: 'center',
+        baseline: 'bottom'
+      });
+      ctx.restore();
+
+      // Strumming / Crossing Detection
+      const lastState = lastStrumStateRef.current;
+      if (inStrumZone && lastState.inZone && lastState.s !== null) {
+        const deltaS = sPick - lastState.s;
+        const dt = (timestamp - lastState.time) / 1000;
+        const velocity = dt > 0 ? deltaS / dt : 0; // strings per second
+
+        if (Math.abs(deltaS) >= 0.35 && Math.abs(velocity) >= 3.0) {
+          const sMin = Math.min(lastState.s, sPick);
+          const sMax = Math.max(lastState.s, sPick);
+          const crossed = [];
+          for (let str = 1; str <= 6; str++) {
+            if (str >= Math.floor(sMin + 0.1) && str <= Math.ceil(sMax - 0.1)) {
+              crossed.push(str);
+              vibratingStringsRef.current[str] = timestamp;
+            }
+          }
+
+          if (crossed.length > 0) {
+            const dir = deltaS > 0 ? 'DOWN ↓' : 'UP ↑';
+            const chordPrefix = activeChord ? `${activeChord.name} ` : '';
+            const strumDesc = crossed.length >= 3 ? `${chordPrefix}STRUM ${dir}` : `${chordPrefix}PICK S:${crossed.join(',')}`;
+            activeStrumDisplayRef.current = {
+              text: `${strumDesc} [Strings ${crossed.join(',')}]`,
+              time: timestamp,
+              color: activeChord ? (activeChord.quality === 'major' ? '#10b981' : '#a855f7') : '#f59e0b',
+              chord: activeChord ? activeChord.name : null
+            };
+          }
+        }
+      }
+
+      lastStrumStateRef.current = {
+        time: timestamp,
+        s: sPick,
+        inZone: inStrumZone
+      };
+
+      if (inStrumZone) {
+        strumStatusDesc = `Pick @ Str ${sPick.toFixed(1)}`;
+      }
+    } else {
+      lastStrumStateRef.current = { time: timestamp, s: null, inZone: false };
+      pickTrailRef.current = [];
     }
 
     // Draw ArUco marker boundaries and IDs
@@ -460,20 +652,22 @@ export default function ARCamera({
       });
     });
 
-    // Draw Hand skeleton and landmarks
+    // Draw Hand skeletons (Left fretting in finger colors, Right strumming in amber)
     if (handLandmarks && handLandmarks.length > 0) {
-      ctx.fillStyle = 'rgba(6, 182, 212, 0.9)'; // neon cyan joints
-      ctx.strokeStyle = 'rgba(6, 182, 212, 0.4)'; // bones
-      ctx.lineWidth = 3;
-
       handLandmarks.forEach(hand => {
+        const isStrumHand = (hand === strumHandLandmarks);
+
+        // Draw joint circles
+        ctx.fillStyle = isStrumHand ? 'rgba(254, 215, 170, 0.9)' : 'rgba(255, 255, 255, 0.8)';
         hand.forEach(lm => {
           ctx.beginPath();
-          ctx.arc(lm.x * width, lm.y * height, 4, 0, 2 * Math.PI);
+          ctx.arc(lm.x * width, lm.y * height, isStrumHand ? 3.5 : 3, 0, 2 * Math.PI);
           ctx.fill();
         });
 
-        const drawPath = (indices) => {
+        const drawSegmentPath = (indices, strokeColor, lineWidth = 2.5) => {
+          ctx.strokeStyle = strokeColor;
+          ctx.lineWidth = lineWidth;
           ctx.beginPath();
           ctx.moveTo(hand[indices[0]].x * width, hand[indices[0]].y * height);
           for (let i = 1; i < indices.length; ++i) {
@@ -482,34 +676,196 @@ export default function ARCamera({
           ctx.stroke();
         };
 
-        drawPath([0, 1, 2, 3, 4]);     // Thumb
-        drawPath([0, 5, 6, 7, 8]);     // Index
-        drawPath([0, 9, 10, 11, 12]);  // Middle
-        drawPath([0, 13, 14, 15, 16]); // Ring
-        drawPath([0, 17, 18, 19, 20]); // Pinky
-        drawPath([5, 9, 13, 17]);      // Knuckles
+        // Draw palm/knuckle connectors
+        drawSegmentPath([0, 5, 9, 13, 17, 0], isStrumHand ? 'rgba(245, 158, 11, 0.3)' : 'rgba(255, 255, 255, 0.25)', 1.5);
+        drawSegmentPath([5, 9, 13, 17], isStrumHand ? 'rgba(245, 158, 11, 0.4)' : 'rgba(255, 255, 255, 0.35)', 2);
+
+        // Draw finger bones
+        FRET_FINGERS.forEach(f => {
+          drawSegmentPath(f.path, isStrumHand ? 'rgba(245, 158, 11, 0.65)' : f.color, 2.5);
+        });
       });
     }
 
-    // Draw index finger tip target ring if found
-    if (indexTipPos) {
-      ctx.strokeStyle = 'rgba(6, 182, 212, 0.9)';
-      ctx.lineWidth = 2;
+    // Highlight fretted positions on the guitar neck for every active fretting finger
+    if (neckGeometry) {
+      const activeFretPoints = [];
+
+      trackedFingers.forEach(f => {
+        if (f.isActive) {
+          const fretDist = FRET_ABSOLUTE_DISTANCES_FROM_NUT[f.fret - 1];
+          if (fretDist !== undefined) {
+            const prevDist = f.fret > 1 ? FRET_ABSOLUTE_DISTANCES_FROM_NUT[f.fret - 2] : 0.0;
+            const midFretDist = (fretDist + prevDist) / 2;
+            const { fx, fy, fWidth } = getFretPositionAndWidth(midFretDist, neckGeometry);
+            const tString = ((f.string - 1) / 5 - 0.5) * 0.88;
+            const nx = fx + (tString * fWidth) * neckGeometry.perpX;
+            const ny = fy + (tString * fWidth) * neckGeometry.perpY;
+
+            activeFretPoints.push({ x: nx, y: ny, string: f.string, fret: f.fret, color: f.color });
+
+            // Glowing note dot on fretboard matching finger color
+            ctx.save();
+            ctx.shadowColor = f.color;
+            ctx.shadowBlur = 12;
+            ctx.fillStyle = f.color;
+            ctx.beginPath();
+            ctx.arc(nx, ny, 7, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+      });
+
+      // Draw glowing AR Chord Constellation lines connecting active notes on fretboard
+      if (activeChord && activeFretPoints.length >= 2) {
+        ctx.save();
+        const isMajor = activeChord.quality === 'major';
+        ctx.strokeStyle = isMajor ? 'rgba(16, 185, 129, 0.75)' : 'rgba(168, 85, 247, 0.75)';
+        ctx.lineWidth = 2.5;
+        ctx.shadowColor = isMajor ? '#10b981' : '#a855f7';
+        ctx.shadowBlur = 12;
+        ctx.beginPath();
+        activeFretPoints.sort((a, b) => a.string - b.string);
+        activeFretPoints.forEach((pt, i) => {
+          if (i === 0) ctx.moveTo(pt.x, pt.y);
+          else ctx.lineTo(pt.x, pt.y);
+        });
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // Draw fingertip target rings and finger badges for all fretting fingers
+    trackedFingers.forEach(f => {
+      // Outer target ring
+      ctx.strokeStyle = f.ringColor;
+      ctx.lineWidth = f.isActive ? 2.5 : 1.5;
       ctx.beginPath();
-      ctx.arc(indexTipPos.x, indexTipPos.y, 12, 0, 2 * Math.PI);
+      ctx.arc(f.pos.x, f.pos.y, f.isActive ? 13 : 9, 0, 2 * Math.PI);
       ctx.stroke();
 
-      ctx.fillStyle = 'rgba(6, 182, 212, 0.3)';
+      // Inner dot
+      ctx.fillStyle = f.isActive ? f.color : 'rgba(15, 23, 42, 0.7)';
       ctx.beginPath();
-      ctx.arc(indexTipPos.x, indexTipPos.y, 6, 0, 2 * Math.PI);
+      ctx.arc(f.pos.x, f.pos.y, f.isActive ? 6 : 4, 0, 2 * Math.PI);
       ctx.fill();
+
+      // Finger number label: '1', '2', '3', '4', 'T' above fingertip
+      drawUnmirroredText(ctx, f.num, f.pos.x, f.pos.y - 15, {
+        font: 'bold 11px monospace',
+        fillStyle: f.color,
+        align: 'center',
+        baseline: 'bottom'
+      });
+
+      // If active on fretboard: show Fret & String badge below fingertip
+      if (f.isActive) {
+        drawUnmirroredText(ctx, `F${f.fret}·S${f.string}`, f.pos.x, f.pos.y + 15, {
+          font: 'bold 10px monospace',
+          fillStyle: '#ffffff',
+          align: 'center',
+          baseline: 'top'
+        });
+      }
+    });
+
+    // Draw Real-time AR Chord Card or Strum Banner
+    const timeSinceStrum = timestamp - activeStrumDisplayRef.current.time;
+
+    if (activeChord) {
+      const isMajor = activeChord.quality === 'major';
+      const chordThemeColor = isMajor ? '#10b981' : '#a855f7';
+      const cardW = 310;
+      const cardH = 56;
+      const cardX = width / 2;
+      const cardY = 48;
+
+      ctx.save();
+      // Holographic card background & glowing border
+      ctx.shadowColor = timeSinceStrum < 750 ? '#f59e0b' : chordThemeColor;
+      ctx.shadowBlur = timeSinceStrum < 750 ? 24 : 16;
+      ctx.fillStyle = 'rgba(8, 12, 22, 0.88)';
+      ctx.strokeStyle = timeSinceStrum < 750 ? '#fbbf24' : chordThemeColor;
+      ctx.lineWidth = timeSinceStrum < 750 ? 2.5 : 1.8;
+
+      // Rounded rectangle card
+      const r = 12;
+      const left = cardX - cardW / 2;
+      const top = cardY - cardH / 2;
+      ctx.beginPath();
+      ctx.moveTo(left + r, top);
+      ctx.lineTo(left + cardW - r, top);
+      ctx.quadraticCurveTo(left + cardW, top, left + cardW, top + r);
+      ctx.lineTo(left + cardW, top + cardH - r);
+      ctx.quadraticCurveTo(left + cardW, top + cardH, left + cardW - r, top + cardH);
+      ctx.lineTo(left + r, top + cardH);
+      ctx.quadraticCurveTo(left, top + cardH, left, top + cardH - r);
+      ctx.lineTo(left, top + r);
+      ctx.quadraticCurveTo(left, top, left + r, top);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Main Chord Title
+      const strumBadge = timeSinceStrum < 750 ? ' ⚡ STRUMMED' : '';
+      drawUnmirroredText(ctx, `🎸 ${activeChord.name.toUpperCase()}${strumBadge}`, cardX, cardY - 9, {
+        font: 'bold 18px monospace',
+        fillStyle: timeSinceStrum < 750 ? '#fbbf24' : '#ffffff',
+        align: 'center',
+        baseline: 'middle'
+      });
+
+      // Triad Notes + Shape Tag
+      const subText = `Triad: ${activeChord.notes.join(' • ')}  |  ${activeChord.shape || 'Chord'} (${Math.round(activeChord.confidence * 100)}%)`;
+      drawUnmirroredText(ctx, subText, cardX, cardY + 14, {
+        font: 'bold 11px monospace',
+        fillStyle: chordThemeColor,
+        align: 'center',
+        baseline: 'middle'
+      });
+
+      ctx.restore();
+    } else if (timeSinceStrum < 750) {
+      // Standalone Strum Banner if played without an identified chord
+      const alpha = 1 - timeSinceStrum / 750;
+      ctx.save();
+      ctx.shadowColor = '#f59e0b';
+      ctx.shadowBlur = 14;
+      drawUnmirroredText(ctx, `⚡ ${activeStrumDisplayRef.current.text}`, width / 2, 45, {
+        font: 'bold 15px monospace',
+        fillStyle: `rgba(245, 158, 11, ${alpha})`,
+        align: 'center',
+        baseline: 'middle'
+      });
+      ctx.restore();
     }
 
     // Update Fretboard overlay info text in the DOM HUD
-    if (activeFret > 0 && activeString > 0) {
+    const activeFingers = trackedFingers.filter(f => f.isActive);
+    if (activeFingers.length > 0 || timeSinceStrum < 750 || activeChord) {
       if (hudRef.current) {
-        hudRef.current.textContent = `FRET: ${activeFret} | STRING: ${activeString}`;
+        let hudContent = '';
+        if (activeChord) {
+          hudContent += `🎸 ${activeChord.name.toUpperCase()}  ✦  `;
+        }
+        hudContent += activeFingers.map(f => `[${f.num}] F${f.fret}:S${f.string}`).join('  |  ');
+        if (timeSinceStrum < 750) {
+          hudContent += `${hudContent ? '   ✦   ' : ''}${activeStrumDisplayRef.current.text}`;
+        }
+        hudRef.current.textContent = hudContent;
         hudRef.current.style.display = 'block';
+
+        if (activeChord) {
+          hudRef.current.style.borderColor = activeChord.quality === 'major' ? '#10b981' : '#a855f7';
+          hudRef.current.style.color = activeChord.quality === 'major' ? '#34d399' : '#c084fc';
+        } else {
+          hudRef.current.style.borderColor = 'var(--accent-cyan)';
+          hudRef.current.style.color = 'var(--accent-cyan)';
+        }
       }
     } else {
       if (hudRef.current) {
@@ -517,10 +873,16 @@ export default function ARCamera({
       }
     }
 
-    // Update status label and keep it the same length each time
-    let statusText = `FPS: ${currentFps} | Markers Tracked: ${detectedMarkers.length} | Hand Tracker: ${mediaPipeLoaded ? 'Active' : 'Offline'}`;
-    statusText += ` | Active Fret: ${activeFret}, String: ${activeString}`;
+    // Update status label
+    const activeSummary = activeFingers.length > 0
+      ? activeFingers.map(f => `${f.name}: F${f.fret}·S${f.string}`).join(', ')
+      : 'None';
 
+    const chordDesc = activeChord ? `${activeChord.name} (${Math.round(activeChord.confidence * 100)}%)` : 'None';
+    let statusText = `FPS: ${currentFps} | Chord: ${chordDesc} | Markers: ${detectedMarkers.length} | Fretting: ${activeSummary}`;
+    if (strumStatusDesc) {
+      statusText += ` | Strum: ${strumStatusDesc}`;
+    }
     onStatusUpdate(statusText);
 
     loopRef.current = requestAnimationFrame(processFrame);
@@ -572,24 +934,89 @@ export default function ARCamera({
       }
     });
 
-    // 2. Draw Strings spanning the full width of the guitar neck
+    // 2. Draw Strumming Zone over guitar body (t: 0.92 to 1.38)
+    const tStrum1 = 0.92;
+    const tStrum2 = 1.38;
+    const wStrum1 = endNeckWidth * 1.12;
+    const wStrum2 = endNeckWidth * 1.28;
+
+    const sz1X = start.x + tStrum1 * dx + (wStrum1 / 2) * perpX;
+    const sz1Y = start.y + tStrum1 * dy + (wStrum1 / 2) * perpY;
+    const sz2X = start.x + tStrum1 * dx - (wStrum1 / 2) * perpX;
+    const sz2Y = start.y + tStrum1 * dy - (wStrum1 / 2) * perpY;
+
+    const sz3X = start.x + tStrum2 * dx - (wStrum2 / 2) * perpX;
+    const sz3Y = start.y + tStrum2 * dy - (wStrum2 / 2) * perpY;
+    const sz4X = start.x + tStrum2 * dx + (wStrum2 / 2) * perpX;
+    const sz4Y = start.y + tStrum2 * dy + (wStrum2 / 2) * perpY;
+
+    ctx.save();
+    // Glowing amber background fill
+    ctx.fillStyle = 'rgba(245, 158, 11, 0.07)';
+    ctx.beginPath();
+    ctx.moveTo(sz1X, sz1Y);
+    ctx.lineTo(sz2X, sz2Y);
+    ctx.lineTo(sz3X, sz3Y);
+    ctx.lineTo(sz4X, sz4Y);
+    ctx.closePath();
+    ctx.fill();
+
+    // Subtle dashed amber border
+    ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Strum Zone Label
+    const szMidX = start.x + ((tStrum1 + tStrum2) / 2) * dx;
+    const szMidY = start.y + ((tStrum1 + tStrum2) / 2) * dy;
+    const labelOffset = (wStrum1 + wStrum2) / 4 + 10;
+    drawUnmirroredText(ctx, '⚡ STRUM ZONE', szMidX + labelOffset * perpX, szMidY + labelOffset * perpY, {
+      font: 'bold 10px monospace',
+      fillStyle: 'rgba(245, 158, 11, 0.85)',
+      align: 'center',
+      baseline: 'middle'
+    });
+    ctx.restore();
+
+    // 3. Draw Strings from Nut through Strum Zone to Bridge (with vibration animation)
+    const tBridge = 1.38;
+    const bridgeNeckWidth = endNeckWidth * 1.15;
+    const nowTime = performance.now();
+
     for (let s = 1; s <= 6; ++s) {
-      // s=1 (Low E) to s=6 (High E)
-      // Normalized offset from -0.5 to +0.5, with 0.88 margin from the fretboard edges
       const tString = ((s - 1) / 5 - 0.5) * 0.88;
 
       const x1 = start.x + (tString * nutNeckWidth) * perpX;
       const y1 = start.y + (tString * nutNeckWidth) * perpY;
 
-      const x2 = end.x + (tString * endNeckWidth) * perpX;
-      const y2 = end.y + (tString * endNeckWidth) * perpY;
+      // Extend to the bridge across the strum zone
+      const xBridge = start.x + tBridge * dx + (tString * bridgeNeckWidth) * perpX;
+      const yBridge = start.y + tBridge * dy + (tString * bridgeNeckWidth) * perpY;
 
-      ctx.lineWidth = 1.2 + (s * 0.45); // String thickness gradient (Low E thicker)
-      ctx.strokeStyle = `rgba(255, 255, 255, ${0.45 + (s / 10)})`;
+      // Check if this string is currently vibrating from a recent pick/strum
+      const lastStrumTime = vibratingStringsRef.current[s] || 0;
+      const timeSinceStrum = nowTime - lastStrumTime;
+      const isVibrating = timeSinceStrum < 350;
+
+      ctx.save();
+      if (isVibrating) {
+        const vibFactor = 1 - timeSinceStrum / 350;
+        ctx.shadowColor = '#f59e0b';
+        ctx.shadowBlur = 14 * vibFactor;
+        ctx.lineWidth = (1.5 + (s * 0.45)) + (4 * vibFactor);
+        ctx.strokeStyle = `rgba(254, 215, 170, ${0.85 + 0.15 * vibFactor})`;
+      } else {
+        ctx.lineWidth = 1.2 + (s * 0.45);
+        ctx.strokeStyle = `rgba(255, 255, 255, ${0.45 + (s / 10)})`;
+      }
+
       ctx.beginPath();
       ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
+      ctx.lineTo(xBridge, yBridge);
       ctx.stroke();
+      ctx.restore();
     }
   };
 
