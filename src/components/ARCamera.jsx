@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Square, Video, Sliders, Maximize2, Minimize2 } from 'lucide-react';
+import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX } from 'lucide-react';
 import { detectMarkers } from '../utils/aruco_detector';
 import {
   calculateGuitarFromMarkers,
@@ -15,6 +15,7 @@ import {
   ARUCO_MARKER_MAP
 } from '../utils/guitar_math';
 import { detectChordFromFingers, createChordSmoother } from '../utils/chord_detector';
+import { guitarAudio } from '../utils/guitar_audio';
 
 // Helper to draw text un-mirrored on a mirrored canvas context
 const drawUnmirroredText = (ctx, text, x, y, options = {}) => {
@@ -68,6 +69,16 @@ export default function ARCamera({
   const [cameraActive, setCameraActive] = useState(false);
   const [mediaPipeLoaded, setMediaPipeLoaded] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Audio state (persisted in localStorage)
+  const [audioEnabled, setAudioEnabled] = useState(() => {
+    const saved = localStorage.getItem('arguitar_audio_enabled');
+    return saved !== null ? saved === 'true' : true;
+  });
+  useEffect(() => {
+    localStorage.setItem('arguitar_audio_enabled', audioEnabled.toString());
+    guitarAudio.setMuted(!audioEnabled);
+  }, [audioEnabled]);
 
   // Sync fullscreen state with browser events (handles Esc key too)
   useEffect(() => {
@@ -162,6 +173,11 @@ export default function ARCamera({
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.play();
+
+        // Prime Web Audio on user gesture
+        if (audioEnabled) {
+          guitarAudio.ensureAudioContext();
+        }
 
         // Lazy-load MediaPipe HandLandmarker when webcam starts BEFORE starting the heavy frame processing loop
         await initMediaPipe();
@@ -613,6 +629,26 @@ export default function ARCamera({
               color: activeChord ? (activeChord.quality === 'major' ? '#10b981' : '#a855f7') : '#f59e0b',
               chord: activeChord ? activeChord.name : null
             };
+
+            // Real-Time Guitar Audio Pluck / Strum Synthesis
+            if (audioEnabled) {
+              const currentFretted = {};
+              trackedFingers.forEach(f => {
+                if (f.isActive && f.string && f.fret) {
+                  currentFretted[f.string] = f.fret;
+                }
+              });
+
+              const normalizedVelocity = Math.min(1.0, Math.max(0.35, Math.abs(velocity) / 9));
+
+              if (activeChord && crossed.length >= 3) {
+                // Strum full chord voicing with natural staggered timing
+                guitarAudio.strumChord(activeChord, dir, normalizedVelocity);
+              } else {
+                // Pluck the specific crossed strings at their current fretted positions
+                guitarAudio.strumStrings(crossed, currentFretted, dir, normalizedVelocity);
+              }
+            }
           }
         }
       }
@@ -1141,6 +1177,29 @@ export default function ARCamera({
             <Square size={16} /> Stop Camera
           </button>
         )}
+
+        {/* Real-time Audio Toggle Button */}
+        <button
+          type="button"
+          className={`btn-secondary ${audioEnabled ? 'active' : ''}`}
+          onClick={async () => {
+            const next = !audioEnabled;
+            setAudioEnabled(next);
+            guitarAudio.setMuted(!next);
+            if (next) await guitarAudio.ensureAudioContext();
+          }}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '7px 14px',
+            fontSize: '13px'
+          }}
+          title={audioEnabled ? "Guitar Sound ON (Click to Mute)" : "Guitar Sound Muted (Click to Unmute)"}
+        >
+          {audioEnabled ? <Volume2 size={16} color="var(--accent-cyan)" /> : <VolumeX size={16} color="var(--text-secondary)" />}
+          <span style={{ fontFamily: 'var(--font-mono)' }}>{audioEnabled ? 'Sound ON' : 'Muted'}</span>
+        </button>
 
         {/* Neck Width Calibrator */}
         <div style={{
