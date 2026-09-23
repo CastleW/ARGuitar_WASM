@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX } from 'lucide-react';
+import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass } from 'lucide-react';
 import { detectMarkers } from '../utils/aruco_detector';
 import {
   calculateGuitarFromMarkers,
@@ -79,6 +79,16 @@ export default function ARCamera({
     localStorage.setItem('arguitar_audio_enabled', audioEnabled.toString());
     guitarAudio.setMuted(!audioEnabled);
   }, [audioEnabled]);
+
+  // Strum mode: 'smart' (Smart Depth Gate), 'down' (Downstrokes Only), 'both' (Alternating Down & Up)
+  const [strumMode, setStrumMode] = useState(() => {
+    return localStorage.getItem('arguitar_strum_mode') || 'smart';
+  });
+  const strumModeRef = useRef(strumMode);
+  useEffect(() => {
+    strumModeRef.current = strumMode;
+    localStorage.setItem('arguitar_strum_mode', strumMode);
+  }, [strumMode]);
 
   // Sync fullscreen state with browser events (handles Esc key too)
   useEffect(() => {
@@ -577,28 +587,92 @@ export default function ARCamera({
 
       const inStrumZone = (tPick >= 0.88 && tPick <= 1.45 && sPick >= 0.2 && sPick <= 6.8);
 
-      // Draw Pick Cursor (Amber Plectrum / Target)
+      // 3D Depth & Proximity Gate relative to Marker 5 / Guitar Body
+      let zGuitar = 70.0;
+      if (markerPoses && markerPoses[5] && markerPoses[5][2] > 15) {
+        zGuitar = markerPoses[5][2];
+      } else if (markerPoses && markerPoses[4] && markerPoses[4][2] > 15) {
+        zGuitar = markerPoses[4][2] * 1.08;
+      } else if (neckGeometry.depthRatio) {
+        zGuitar = 70.0 / (neckGeometry.depthRatio || 1.0);
+      }
+
+      // Hand apparent scale & depth from MediaPipe
+      let zHand = zGuitar;
+      let handSpanPx = 0;
+      if (strumHandLandmarks && strumHandLandmarks[0] && strumHandLandmarks[9]) {
+        const dxH = (strumHandLandmarks[9].x - strumHandLandmarks[0].x) * width;
+        const dyH = (strumHandLandmarks[9].y - strumHandLandmarks[0].y) * height;
+        handSpanPx = Math.hypot(dxH, dyH);
+        if (handSpanPx > 10) {
+          // Average adult wrist-to-middle MCP is ~9.5 cm. Camera focal length ~892px
+          zHand = (892 * 9.5) / handSpanPx;
+        }
+      }
+
+      // deltaZ > 0 means the hand is closer to camera than guitar body (lifted off strings)
+      const deltaZ = zGuitar - zHand;
+
+      // Optical scale ratio relative to Marker 5 pixel width if visible
+      let opticalScaleRatio = 1.0;
+      const m5 = markers[5];
+      if (m5 && m5.corners && m5.corners.length >= 4 && handSpanPx > 10) {
+        const m5Width = Math.hypot(m5.corners[1].x - m5.corners[0].x, m5.corners[1].y - m5.corners[0].y);
+        if (m5Width > 15) {
+          opticalScaleRatio = (handSpanPx / 9.5) / (m5Width / 8.0);
+        }
+      }
+
+      // Hand is lifted if it is > 3.5 cm in front of the guitar body or optical scale expands by > 16%
+      const isHandLifted = deltaZ > 3.5 || opticalScaleRatio > 1.16;
+      const inStrikePlane = inStrumZone && !isHandLifted;
+
+      // Draw Pick Cursor (with Depth & Lifted Air Indicator)
       ctx.save();
-      ctx.shadowColor = inStrumZone ? '#f59e0b' : 'rgba(255,255,255,0.4)';
-      ctx.shadowBlur = inStrumZone ? 16 : 6;
-      ctx.fillStyle = inStrumZone ? 'rgba(245, 158, 11, 0.95)' : 'rgba(255, 255, 255, 0.7)';
-      ctx.beginPath();
-      ctx.arc(pickX, pickY, inStrumZone ? 8 : 5, 0, 2 * Math.PI);
-      ctx.fill();
+      if (inStrumZone && isHandLifted) {
+        // Hand is lifted in air reset: draw subtle dashed ring
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.75)';
+        ctx.lineWidth = 1.8;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.arc(pickX, pickY, 13, 0, 2 * Math.PI);
+        ctx.stroke();
 
-      // Outer targeting crosshair
-      ctx.strokeStyle = inStrumZone ? '#f59e0b' : 'rgba(255, 255, 255, 0.5)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(pickX, pickY, inStrumZone ? 14 : 9, 0, 2 * Math.PI);
-      ctx.stroke();
+        ctx.fillStyle = 'rgba(148, 163, 184, 0.4)';
+        ctx.beginPath();
+        ctx.arc(pickX, pickY, 5, 0, 2 * Math.PI);
+        ctx.fill();
 
-      drawUnmirroredText(ctx, inStrumZone ? '⚡ PICK' : 'R-HAND', pickX, pickY - 18, {
-        font: 'bold 11px monospace',
-        fillStyle: inStrumZone ? '#f59e0b' : '#ffffff',
-        align: 'center',
-        baseline: 'bottom'
-      });
+        drawUnmirroredText(ctx, `↷ LIFTED (+${Math.max(0, deltaZ).toFixed(0)}cm)`, pickX, pickY - 18, {
+          font: 'bold 10px monospace',
+          fillStyle: 'rgba(148, 163, 184, 0.85)',
+          align: 'center',
+          baseline: 'bottom'
+        });
+      } else {
+        // Hand is in strike plane (ready to strum)
+        ctx.shadowColor = inStrikePlane ? '#f59e0b' : 'rgba(255,255,255,0.4)';
+        ctx.shadowBlur = inStrikePlane ? 16 : 6;
+        ctx.fillStyle = inStrikePlane ? 'rgba(245, 158, 11, 0.95)' : 'rgba(255, 255, 255, 0.7)';
+        ctx.beginPath();
+        ctx.arc(pickX, pickY, inStrikePlane ? 8 : 5, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Outer targeting crosshair
+        ctx.strokeStyle = inStrikePlane ? '#f59e0b' : 'rgba(255, 255, 255, 0.5)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(pickX, pickY, inStrikePlane ? 14 : 9, 0, 2 * Math.PI);
+        ctx.stroke();
+
+        const label = inStrikePlane ? '⚡ STRIKE' : 'R-HAND';
+        drawUnmirroredText(ctx, label, pickX, pickY - 18, {
+          font: 'bold 11px monospace',
+          fillStyle: inStrikePlane ? '#f59e0b' : '#ffffff',
+          align: 'center',
+          baseline: 'bottom'
+        });
+      }
       ctx.restore();
 
       // Strumming / Crossing Detection
@@ -615,39 +689,64 @@ export default function ARCamera({
           for (let str = 1; str <= 6; str++) {
             if (str >= Math.floor(sMin + 0.1) && str <= Math.ceil(sMax - 0.1)) {
               crossed.push(str);
-              vibratingStringsRef.current[str] = timestamp;
             }
           }
 
           if (crossed.length > 0) {
-            const dir = deltaS > 0 ? 'DOWN ↓' : 'UP ↑';
-            const chordPrefix = activeChord ? `${activeChord.name} ` : '';
-            const strumDesc = crossed.length >= 3 ? `${chordPrefix}STRUM ${dir}` : `${chordPrefix}PICK S:${crossed.join(',')}`;
-            activeStrumDisplayRef.current = {
-              text: `${strumDesc} [Strings ${crossed.join(',')}]`,
-              time: timestamp,
-              color: activeChord ? (activeChord.quality === 'major' ? '#10b981' : '#a855f7') : '#f59e0b',
-              chord: activeChord ? activeChord.name : null
-            };
+            const isDown = deltaS > 0;
+            const isUp = deltaS < 0;
+            const dir = isDown ? 'DOWN ↓' : 'UP ↑';
 
-            // Real-Time Guitar Audio Pluck / Strum Synthesis
-            if (audioEnabled) {
-              const currentFretted = {};
-              trackedFingers.forEach(f => {
-                if (f.isActive && f.string && f.fret) {
-                  currentFretted[f.string] = f.fret;
-                }
+            // Hybrid Depth Gate & Strum Mode Filter:
+            let allowStrum = true;
+            if (strumModeRef.current === 'down') {
+              allowStrum = isDown; // 100% silent return strokes in down-only mode
+            } else if (strumModeRef.current === 'smart') {
+              // In smart mode: Downstrokes always play; Upstrokes only play if hand is in strike plane!
+              if (isUp && isHandLifted) {
+                allowStrum = false;
+              }
+            }
+
+            if (allowStrum) {
+              crossed.forEach(str => {
+                vibratingStringsRef.current[str] = timestamp;
               });
 
-              const normalizedVelocity = Math.min(1.0, Math.max(0.35, Math.abs(velocity) / 9));
+              const chordPrefix = activeChord ? `${activeChord.name} ` : '';
+              const strumDesc = crossed.length >= 3 ? `${chordPrefix}STRUM ${dir}` : `${chordPrefix}PICK S:${crossed.join(',')}`;
+              activeStrumDisplayRef.current = {
+                text: `${strumDesc} [Strings ${crossed.join(',')}]`,
+                time: timestamp,
+                color: activeChord ? (activeChord.quality === 'major' ? '#10b981' : '#a855f7') : '#f59e0b',
+                chord: activeChord ? activeChord.name : null
+              };
 
-              if (activeChord && crossed.length >= 3) {
-                // Strum full chord voicing with natural staggered timing
-                guitarAudio.strumChord(activeChord, dir, normalizedVelocity);
-              } else {
-                // Pluck the specific crossed strings at their current fretted positions
-                guitarAudio.strumStrings(crossed, currentFretted, dir, normalizedVelocity);
+              // Real-Time Guitar Audio Pluck / Strum Synthesis
+              if (audioEnabled) {
+                const currentFretted = {};
+                trackedFingers.forEach(f => {
+                  if (f.isActive && f.string && f.fret) {
+                    currentFretted[f.string] = f.fret;
+                  }
+                });
+
+                const normalizedVelocity = Math.min(1.0, Math.max(0.35, Math.abs(velocity) / 9));
+
+                if (activeChord && crossed.length >= 3) {
+                  guitarAudio.strumChord(activeChord, dir, normalizedVelocity);
+                } else {
+                  guitarAudio.strumStrings(crossed, currentFretted, dir, normalizedVelocity);
+                }
               }
+            } else {
+              // Strum suppressed (air return reset motion)
+              activeStrumDisplayRef.current = {
+                text: `↷ RESET (AIR) [Strings ${crossed.join(',')}]`,
+                time: timestamp,
+                color: 'rgba(148, 163, 184, 0.7)',
+                chord: null
+              };
             }
           }
         }
@@ -660,7 +759,7 @@ export default function ARCamera({
       };
 
       if (inStrumZone) {
-        strumStatusDesc = `Pick @ Str ${sPick.toFixed(1)}`;
+        strumStatusDesc = `Pick @ Str ${sPick.toFixed(1)} [${isHandLifted ? 'LIFTED' : 'STRIKE'}]`;
       }
     } else {
       lastStrumStateRef.current = { time: timestamp, s: null, inZone: false };
@@ -1199,6 +1298,33 @@ export default function ARCamera({
         >
           {audioEnabled ? <Volume2 size={16} color="var(--accent-cyan)" /> : <VolumeX size={16} color="var(--text-secondary)" />}
           <span style={{ fontFamily: 'var(--font-mono)' }}>{audioEnabled ? 'Sound ON' : 'Muted'}</span>
+        </button>
+
+        {/* Strum Mode Cycle Button */}
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => {
+            const modes = ['smart', 'down', 'both'];
+            const nextIdx = (modes.indexOf(strumMode) + 1) % modes.length;
+            setStrumMode(modes[nextIdx]);
+          }}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '7px 12px',
+            fontSize: '13px',
+            borderColor: strumMode === 'smart' ? '#06b6d4' : (strumMode === 'down' ? '#f59e0b' : '#a855f7')
+          }}
+          title="Click to cycle strum mode: Smart Depth -> Down Only -> Down & Up"
+        >
+          <Compass size={15} color={strumMode === 'smart' ? '#06b6d4' : (strumMode === 'down' ? '#f59e0b' : '#a855f7')} />
+          <span style={{ fontFamily: 'var(--font-mono)' }}>
+            {strumMode === 'smart' && '🎯 Smart Depth'}
+            {strumMode === 'down' && '⬇️ Down Only'}
+            {strumMode === 'both' && '⇅ Down & Up'}
+          </span>
         </button>
 
         {/* Neck Width Calibrator */}
