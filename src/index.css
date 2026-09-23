@@ -213,10 +213,17 @@ h6 {
 .camera-container:fullscreen .camera-viewport,
 .camera-container:-webkit-full-screen .camera-viewport {
   position: relative;
+  aspect-ratio: 16/9;
+  width: min(100vw, calc(100vh * (16 / 9)));
+  height: min(100vh, calc(100vw * (9 / 16)));
+  margin: auto;
+}
+
+.camera-container.res-4-3:fullscreen .camera-viewport,
+.camera-container.res-4-3:-webkit-full-screen .camera-viewport {
   aspect-ratio: 4/3;
   width: min(100vw, calc(100vh * (4 / 3)));
   height: min(100vh, calc(100vw * (3 / 4)));
-  margin: auto;
 }
 
 .camera-feed {

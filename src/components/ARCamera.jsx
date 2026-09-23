@@ -43,6 +43,13 @@ const drawUnmirroredText = (ctx, text, x, y, options = {}) => {
   ctx.restore();
 };
 
+// Resolution presets for webcam capture
+export const RESOLUTION_PRESETS = {
+  '720p':  { width: 1280, height: 720,  label: '720p HD' },
+  '480p':  { width: 640,  height: 480,  label: '480p VGA' },
+  '1080p': { width: 1920, height: 1080, label: '1080p FHD' }
+};
+
 // Configuration for all 5 fingers of the fretting hand
 export const FRET_FINGERS = [
   { id: 'thumb',  name: 'Thumb',  num: 'T', tipIdx: 4,  dipIdx: 3,  color: '#f59e0b', ringColor: 'rgba(245, 158, 11, 0.95)', path: [0, 1, 2, 3, 4] },
@@ -89,6 +96,16 @@ export default function ARCamera({
     strumModeRef.current = strumMode;
     localStorage.setItem('arguitar_strum_mode', strumMode);
   }, [strumMode]);
+
+  // Camera capture resolution: '720p' (default), '480p', '1080p'
+  const [captureResolution, setCaptureResolution] = useState(() => {
+    return localStorage.getItem('arguitar_capture_res') || '720p';
+  });
+  const captureResolutionRef = useRef(captureResolution);
+  useEffect(() => {
+    captureResolutionRef.current = captureResolution;
+    localStorage.setItem('arguitar_capture_res', captureResolution);
+  }, [captureResolution]);
 
   // Sync fullscreen state with browser events (handles Esc key too)
   useEffect(() => {
@@ -168,17 +185,22 @@ export default function ARCamera({
   const activeChordRef = useRef(null);
 
   // Start webcam feed
-  const startCamera = async () => {
+  const startCamera = async (targetRes = captureResolutionRef.current) => {
     try {
-      console.log("Requesting webcam access...");
-      if (addLog) addLog("Requesting webcam access...");
+      const resConfig = RESOLUTION_PRESETS[targetRes] || RESOLUTION_PRESETS['720p'];
+      console.log(`Requesting webcam access (${resConfig.label}: ${resConfig.width}x${resConfig.height})...`);
+      if (addLog) addLog(`Requesting webcam access (${resConfig.label})...`);
 
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480, frameRate: { ideal: 30 } }
+        video: {
+          width: { ideal: resConfig.width },
+          height: { ideal: resConfig.height },
+          frameRate: { ideal: 30 }
+        }
       });
 
-      console.log("Webcam access granted!");
-      if (addLog) addLog("Webcam access granted!");
+      console.log(`Webcam access granted! (${resConfig.label})`);
+      if (addLog) addLog(`Webcam access granted! (${resConfig.label})`);
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -194,13 +216,23 @@ export default function ARCamera({
 
         setCameraActive(true);
         if (onStatusUpdate) {
-          onStatusUpdate("Camera Active | Initializing tracking...", null);
+          onStatusUpdate(`Camera Active (${resConfig.label}) | Initializing tracking...`, null);
         }
       }
     } catch (err) {
       console.error("Error accessing webcam:", err);
       if (addLog) addLog("❌ Webcam Error: " + err.message);
       alert("Error accessing webcam: " + err.message);
+    }
+  };
+
+  const handleResolutionChange = async (newRes) => {
+    setCaptureResolution(newRes);
+    if (cameraActive) {
+      stopCamera();
+      setTimeout(() => {
+        startCamera(newRes);
+      }, 160);
     }
   };
 
@@ -380,9 +412,9 @@ export default function ARCamera({
       markers[m.id] = m;
     });
 
-    // Solve poses (3D positions) of markers for perspective correction
+    // Solve poses (3D positions) of markers for perspective correction (scaled to resolution)
     const markerPoses = {};
-    const { camMatrix, distCoef } = createCameraMats(cv);
+    const { camMatrix, distCoef } = createCameraMats(cv, width, height);
 
     detectedMarkers.forEach(m => {
       if (ARUCO_MARKER_MAP[m.id] !== undefined) {
@@ -1014,7 +1046,7 @@ export default function ARCamera({
       : 'None';
 
     const chordDesc = activeChord ? `${activeChord.name} (${Math.round(activeChord.confidence * 100)}%)` : 'None';
-    let statusText = `FPS: ${currentFps} | Chord: ${chordDesc} | Markers: ${detectedMarkers.length} | Fretting: ${activeSummary}`;
+    let statusText = `FPS: ${currentFps} (${width}x${height}) | Chord: ${chordDesc} | Markers: ${detectedMarkers.length} | Fretting: ${activeSummary}`;
     if (strumStatusDesc) {
       statusText += ` | Strum: ${strumStatusDesc}`;
     }
@@ -1175,12 +1207,18 @@ export default function ARCamera({
   return (
     <div
       ref={containerRef}
-      className="camera-container glass-panel"
+      className={`camera-container glass-panel ${captureResolution === '480p' ? 'res-4-3' : 'res-16-9'}`}
       style={{
-        maxWidth: isFullscreen ? 'none' : (cameraSize === 'full' ? '100%' : `${cameraSize}px`)
+        maxWidth: isFullscreen ? 'none' : (cameraSize === 'full' ? '100%' : `${cameraSize}px`),
+        aspectRatio: isFullscreen ? 'auto' : (captureResolution === '480p' ? '4/3' : '16/9')
       }}
     >
-      <div className="camera-viewport">
+      <div
+        className="camera-viewport"
+        style={{
+          aspectRatio: captureResolution === '480p' ? '4/3' : '16/9'
+        }}
+      >
         <video
           ref={videoRef}
           className="camera-feed"
@@ -1326,6 +1364,38 @@ export default function ARCamera({
             {strumMode === 'both' && '⇅ Down & Up'}
           </span>
         </button>
+
+        {/* Camera Resolution Selector */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          color: 'var(--text-secondary)',
+          fontSize: '12px',
+          fontFamily: 'var(--font-mono)'
+        }}>
+          <Video size={14} style={{ color: 'var(--accent-cyan)' }} />
+          <select
+            value={captureResolution}
+            onChange={(e) => handleResolutionChange(e.target.value)}
+            style={{
+              background: 'rgba(255, 255, 255, 0.08)',
+              border: '1px solid rgba(255, 255, 255, 0.18)',
+              borderRadius: '6px',
+              color: 'var(--text-primary)',
+              padding: '6px 8px',
+              fontSize: '12px',
+              fontFamily: 'var(--font-mono)',
+              cursor: 'pointer',
+              outline: 'none'
+            }}
+            title="Webcam Capture Resolution"
+          >
+            <option value="720p" style={{ background: '#0f172a', color: '#fff' }}>720p HD (Best)</option>
+            <option value="480p" style={{ background: '#0f172a', color: '#fff' }}>480p VGA</option>
+            <option value="1080p" style={{ background: '#0f172a', color: '#fff' }}>1080p FHD</option>
+          </select>
+        </div>
 
         {/* Neck Width Calibrator */}
         <div style={{

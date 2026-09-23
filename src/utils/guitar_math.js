@@ -32,10 +32,17 @@ export const DEFAULT_DIST_COEF = [
 ];
 
 /**
- * Initialize camera matrices in OpenCV.js
+ * Initialize camera matrices in OpenCV.js, scaled proportionally to stream resolution
  */
-export function createCameraMats(cv) {
-  let camMatrix = cv.matFromArray(3, 3, cv.CV_64F, DEFAULT_CAM_MATRIX);
+export function createCameraMats(cv, width = 640, height = 480) {
+  const sx = width / 640.0;
+  const sy = height / 480.0;
+  const scaledMatrix = [
+    DEFAULT_CAM_MATRIX[0] * sx, 0, DEFAULT_CAM_MATRIX[2] * sx,
+    0, DEFAULT_CAM_MATRIX[4] * sy, DEFAULT_CAM_MATRIX[5] * sy,
+    0, 0, 1.0
+  ];
+  let camMatrix = cv.matFromArray(3, 3, cv.CV_64F, scaledMatrix);
   let distCoef = cv.matFromArray(1, 5, cv.CV_64F, DEFAULT_DIST_COEF);
   return { camMatrix, distCoef };
 }
