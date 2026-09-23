@@ -14,7 +14,7 @@ export const FRET_ABSOLUTE_DISTANCES_FROM_NUT = [
 
 export const FRETS_FOR_DRAWING = [0.0, ...FRET_ABSOLUTE_DISTANCES_FROM_NUT];
 
-export const TOTAL_FRET_LENGTH_IN_CM = 52.0; // Calibrated for Marker 5 placed on body past the 22nd fret (~19" fretboard)
+export const TOTAL_FRET_LENGTH_IN_CM = 49.6; // Calibrated for Marker 5 placed on body past the 22nd fret (~19" fretboard)
 export const NECK_WIDTH = 4.6; // cm
 export const NUMBER_OF_STRINGS = 6;
 export const ARUCO_MARKER_ABSOLUTE_POSITIONS = [0.0, 12.7, 28.0, 34.5, 52.0];
@@ -51,24 +51,24 @@ export function solvePose(cv, corners, camMatrix, distCoef) {
     4.0, -4.0, 0.0,
     -4.0, -4.0, 0.0
   ]);
-  
+
   let imagePoints = cv.matFromArray(4, 1, cv.CV_32FC2, [
     corners[0].x, corners[0].y,
     corners[1].x, corners[1].y,
     corners[2].x, corners[2].y,
     corners[3].x, corners[3].y
   ]);
-  
+
   let rvec = new cv.Mat();
   let tvec = new cv.Mat();
-  
+
   let method = cv.SOLVEPNP_IPPE_SQUARE !== undefined ? cv.SOLVEPNP_IPPE_SQUARE : (cv.SOLVEPNP_ITERATIVE || 0);
-  
+
   let success = cv.solvePnP(markerPoints, imagePoints, camMatrix, distCoef, rvec, tvec, false, method);
-  
+
   markerPoints.delete();
   imagePoints.delete();
-  
+
   if (success) {
     let r = [rvec.doubleAt(0), rvec.doubleAt(1), rvec.doubleAt(2)];
     let t = [tvec.doubleAt(0), tvec.doubleAt(1), tvec.doubleAt(2)];
@@ -93,7 +93,7 @@ export function perpendicularIntersection(p1x, p1y, p2x, p2y, p3x, p3y) {
   const c = p2x * p1y - p1x * p2y;
   const denom = a_c + b_c;
   if (denom === 0) return { x: p1x, y: p1y };
-  
+
   const x = ((b_c * p3x) - (a * b * p3y) - (a * c)) / denom;
   const y = ((a_c * p3y) - (a * b * p3x) - (b * c)) / denom;
   return { x, y };
@@ -141,13 +141,24 @@ function searchSorted(arr, val) {
 /**
  * Calculate fret and string from start and end points of guitar and finger position
  * @returns {Array} [fret_number, string_number]
+ * This is centre to centre on each square marker
  */
+/*
 export const ARUCO_MARKER_MAP = {
   1: 0.0,
   2: 12.7,
   3: 28.0,
   4: 34.5,
   5: 52.0
+};
+*/
+
+export const ARUCO_MARKER_MAP = {
+  1: 0.0,
+  2: 15.0,
+  3: 26.2,
+  4: 35.2,
+  5: 50.0 // Fretboard end
 };
 
 /**
@@ -325,11 +336,39 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
 
   // 1. Check 3D pose depth from solvePnP if available
   let rFromPose = null;
-  if (markerPoses && markerPoses[1] && markerPoses[5]) {
-    const zNut = markerPoses[1][2];
-    const zEnd = markerPoses[5][2];
-    if (zNut > 10 && zEnd > 10) {
-      rFromPose = zEnd / zNut;
+  if (markerPoses) {
+    if (markerPoses[1] && markerPoses[5]) {
+      const zNut = markerPoses[1][2];
+      const zEnd = markerPoses[5][2];
+      if (zNut > 10 && zEnd > 10) {
+        rFromPose = zEnd / zNut;
+      }
+    } else {
+      // Find any pair with poses to estimate depth ratio
+      const posesWithCm = [];
+      for (const [idStr, posCm] of Object.entries(ARUCO_MARKER_MAP)) {
+        const id = parseInt(idStr, 10);
+        if (markerPoses[id] && markerPoses[id][2] > 10) {
+          posesWithCm.push({ id, cm: posCm, z: markerPoses[id][2] });
+        }
+      }
+      if (posesWithCm.length >= 2) {
+        posesWithCm.sort((a, b) => a.cm - b.cm);
+        const pFirst = posesWithCm[0];
+        const pLast = posesWithCm[posesWithCm.length - 1];
+        const span = pLast.cm - pFirst.cm;
+        if (span > 0) {
+          const wFirst = 1 / pFirst.z;
+          const wLast = 1 / pLast.z;
+          const nutCm = ARUCO_MARKER_MAP[1] !== undefined ? ARUCO_MARKER_MAP[1] : 0.0;
+          const endCm = ARUCO_MARKER_MAP[5] !== undefined ? ARUCO_MARKER_MAP[5] : (totalFretLength || TOTAL_FRET_LENGTH_IN_CM);
+          const wNut = wFirst - ((wLast - wFirst) / span) * (pFirst.cm - nutCm);
+          const wEnd = wLast + ((wLast - wFirst) / span) * (endCm - pLast.cm);
+          if (wNut > 0 && wEnd > 0) {
+            rFromPose = wNut / wEnd;
+          }
+        }
+      }
     }
   }
 
@@ -472,19 +511,19 @@ export function calculateFretAndStringFromGuitarMarkers(guitarStartOrMarkers, gu
   const p1x = guitarStart.x, p1y = guitarStart.y;
   const p2x = guitarEnd.x, p2y = guitarEnd.y;
   const p3x = fingerPos.x, p3y = fingerPos.y;
-  
+
   const intersection = perpendicularIntersection(p1x, p1y, p2x, p2y, p3x, p3y);
-  
+
   const distFromStart2 = (intersection.x - p1x) ** 2 + (intersection.y - p1y) ** 2;
   const intersectionFromGuitarStart = Math.sqrt(Math.abs(distFromStart2));
-  
+
   const guitarLength = Math.sqrt(Math.abs((p2x - p1x) ** 2 + (p2y - p1y) ** 2));
   if (guitarLength === 0) return [0, 0, 0];
-  
+
   const fretLocator = intersectionFromGuitarStart * TOTAL_FRET_LENGTH_IN_CM / guitarLength;
-  
+
   let stringDistance = Math.sqrt(Math.abs((intersection.x - p3x) ** 2 + (intersection.y - p3y) ** 2)) * TOTAL_FRET_LENGTH_IN_CM / guitarLength;
-  
+
   // Sign of stringDistance based on cross product
   const vecAx = p1x - p2x;
   const vecAy = p1y - p2y;
@@ -494,77 +533,148 @@ export function calculateFretAndStringFromGuitarMarkers(guitarStartOrMarkers, gu
   if (zComponent < 0) {
     stringDistance = -stringDistance;
   }
-  
+
   const stringNumber = roundString ? calculateStringRounded(stringDistance) : calculateStringUnrounded(stringDistance);
   const fretIdx = searchSorted(FRET_ABSOLUTE_DISTANCES_FROM_NUT, fretLocator);
-  
+
   return [fretIdx + 1, stringNumber, fretLocator];
 }
 
 /**
  * Extract guitar end-points from marker coordinates mapping
- * Supports any detected pair of markers (1&5, 1&4, 2&5, 2&4, etc.)
+ * Supports ANY detected pair or combination of markers (1, 2, 3, 4, 5)
  */
 export function calculateGuitarFromMarkers(markers, markerPoses = null) {
   if (!markers) return null;
-  const m1 = markers[1];
-  const m5 = markers[5];
+
+  // 1. Gather all recognized markers on the neck
+  const detected = [];
+  for (const [idStr, posCm] of Object.entries(ARUCO_MARKER_MAP)) {
+    const id = parseInt(idStr, 10);
+    const m = markers[id];
+    if (m) {
+      const center = m.center || m;
+      if (center && typeof center.x === 'number' && typeof center.y === 'number') {
+        detected.push({
+          id,
+          center,
+          cm: posCm,
+          pose: (markerPoses && markerPoses[id]) || null
+        });
+      }
+    }
+  }
+
+  // Need at least 2 markers to determine guitar direction and position
+  if (detected.length < 2) {
+    return null;
+  }
+
+  detected.sort((a, b) => a.cm - b.cm);
+
+  const nutCm = ARUCO_MARKER_MAP[1] !== undefined ? ARUCO_MARKER_MAP[1] : 0.0;
+  const endCm = ARUCO_MARKER_MAP[5] !== undefined ? ARUCO_MARKER_MAP[5] : TOTAL_FRET_LENGTH_IN_CM;
+
+  // Optimal case: Markers 1 and 5 are both present
+  const m1 = detected.find(m => m.id === 1);
+  const m5 = detected.find(m => m.id === 5);
   if (m1 && m5) {
     return {
       start: m1.center,
       end: m5.center,
-      poseStart: (markerPoses && markerPoses[1]) || null,
-      poseEnd: (markerPoses && markerPoses[5]) || null
+      poseStart: m1.pose,
+      poseEnd: m5.pose
     };
   }
 
-  // Fallback pairs if 1 or 5 is missing
-  const m4 = markers[4];
-  const m2 = markers[2];
+  // Universal Fallback: Use the two detected markers with largest physical baseline
+  const first = detected[0];
+  const last = detected[detected.length - 1];
+  const spanCm = last.cm - first.cm;
 
-  if (m1 && m4) {
-    const scale = ARUCO_MARKER_MAP[5] / ARUCO_MARKER_MAP[4]; // 48.0 / 34.5
-    const dx = m4.center.x - m1.center.x;
-    const dy = m4.center.y - m1.center.y;
-    return {
-      start: m1.center,
-      end: { x: m1.center.x + dx * scale, y: m1.center.y + dy * scale },
-      poseStart: (markerPoses && markerPoses[1]) || null,
-      poseEnd: null
-    };
+  if (spanCm <= 0) {
+    return null;
   }
 
-  if (m2 && m5) {
-    const scale = (ARUCO_MARKER_MAP[5] - ARUCO_MARKER_MAP[1]) / (ARUCO_MARKER_MAP[5] - ARUCO_MARKER_MAP[2]);
-    const dx = m5.center.x - m2.center.x;
-    const dy = m5.center.y - m2.center.y;
-    return {
-      start: { x: m5.center.x - dx * scale, y: m5.center.y - dy * scale },
-      end: m5.center,
-      poseStart: null,
-      poseEnd: (markerPoses && markerPoses[5]) || null
-    };
-  }
+  const dx = last.center.x - first.center.x;
+  const dy = last.center.y - first.center.y;
+  const distSq = dx * dx + dy * dy;
 
-  if (m2 && m4) {
-    const spanCm = ARUCO_MARKER_MAP[4] - ARUCO_MARKER_MAP[2]; // 34.5 - 12.7 = 21.8
-    const dx = m4.center.x - m2.center.x;
-    const dy = m4.center.y - m2.center.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist > 0) {
-      const pxPerCm = dist / spanCm;
-      const dirX = dx / dist;
-      const dirY = dy / dist;
-      return {
-        start: { x: m2.center.x - dirX * ARUCO_MARKER_MAP[2] * pxPerCm, y: m2.center.y - dirY * ARUCO_MARKER_MAP[2] * pxPerCm },
-        end: { x: m2.center.x + dirX * (ARUCO_MARKER_MAP[5] - ARUCO_MARKER_MAP[2]) * pxPerCm, y: m2.center.y + dirY * (ARUCO_MARKER_MAP[5] - ARUCO_MARKER_MAP[2]) * pxPerCm },
-        poseStart: null,
-        poseEnd: null
-      };
+  // Determine perspective depth ratio k = Z_last / Z_first
+  // k > 1 means the 'last' marker is further from the camera than 'first' (causes foreshortening towards last)
+  let k = 1.0;
+
+  // 1. Try from 3D solvePose depths if both first and last have valid poses
+  if (first.pose && last.pose && first.pose[2] > 10 && last.pose[2] > 10) {
+    const kPose = last.pose[2] / first.pose[2];
+    if (kPose > 0.4 && kPose < 2.5) {
+      k = kPose;
     }
   }
 
-  return null;
+  // 2. Or from intermediate marker(s) using 1D projective invariant (cross-ratio)
+  if (detected.length >= 3 && distSq > 0) {
+    // Pick the middle marker closest to the center of the baseline
+    const midTargetCm = (first.cm + last.cm) / 2;
+    let bestMid = detected[1];
+    let bestDiff = Math.abs(bestMid.cm - midTargetCm);
+    for (let i = 2; i < detected.length - 1; i++) {
+      const diff = Math.abs(detected[i].cm - midTargetCm);
+      if (diff < bestDiff) {
+        bestMid = detected[i];
+        bestDiff = diff;
+      }
+    }
+
+    const uPhys = (bestMid.cm - first.cm) / spanCm;
+    const midDx = bestMid.center.x - first.center.x;
+    const midDy = bestMid.center.y - first.center.y;
+    const tScreen = (midDx * dx + midDy * dy) / distSq;
+
+    if (uPhys > 0.05 && uPhys < 0.95 && tScreen > 0.05 && tScreen < 0.95) {
+      // Cross-ratio odds: k = (tScreen / (1 - tScreen)) / (uPhys / (1 - uPhys))
+      const kFrom2D = (tScreen / (1 - tScreen)) / (uPhys / (1 - uPhys));
+      if (kFrom2D > 0.45 && kFrom2D < 2.2) {
+        k = kFrom2D;
+      }
+    }
+  }
+
+  // Helper: Project physical fraction u (where first is u=0, last is u=1) to 2D image coordinates
+  // Accounts for perspective compression: projFraction = (u * k) / ((1 - u) + u * k)
+  const projectPoint = (u) => {
+    const denom = (1 - u) + u * k;
+    let projFraction = u;
+    if (denom > 0.1) {
+      projFraction = (u * k) / denom;
+    }
+    return {
+      x: first.center.x + dx * projFraction,
+      y: first.center.y + dy * projFraction
+    };
+  };
+
+  let start = first.center;
+  let end = last.center;
+
+  // Extrapolate Nut if Marker 1 is missing
+  if (first.id !== 1) {
+    const uNut = (nutCm - first.cm) / spanCm; // negative or 0
+    start = projectPoint(uNut);
+  }
+
+  // Extrapolate End (body) if Marker 5 is missing
+  if (last.id !== 5) {
+    const uEnd = (endCm - first.cm) / spanCm; // > 1
+    end = projectPoint(uEnd);
+  }
+
+  return {
+    start,
+    end,
+    poseStart: (m1 && m1.pose) || null,
+    poseEnd: (m5 && m5.pose) || null
+  };
 }
 
 /**
@@ -573,25 +683,25 @@ export function calculateGuitarFromMarkers(markers, markerPoses = null) {
 export function calculateTargetFingerPosition(guitarStart, guitarEnd, targetFret, targetString) {
   const p1x = guitarStart.x, p1y = guitarStart.y;
   const p2x = guitarEnd.x, p2y = guitarEnd.y;
-  
+
   const guitarLength = Math.sqrt(Math.abs((p2x - p1x) ** 2 + (p2y - p1y) ** 2));
   if (guitarLength === 0) return { x: 0, y: 0 };
-  
+
   const distanceFromNut = FRET_ABSOLUTE_DISTANCES_FROM_NUT[targetFret - 1] || 0;
   const fretLocator = distanceFromNut * guitarLength / TOTAL_FRET_LENGTH_IN_CM;
-  
+
   const guitarSlope = -1;
   const fretSlope = -1 / guitarSlope; // equals 1
-  
+
   const fretCentreX = p1x + (fretLocator * (p2x - p1x) / guitarLength);
   const fretCentreY = p1y + (fretLocator * (p2y - p1y) / guitarLength);
-  
+
   const scaleToAr = guitarLength / TOTAL_FRET_LENGTH_IN_CM;
-  
+
   const adjustedTargetString = (targetString - 1 - ((NUMBER_OF_STRINGS - 1) / 2));
   const stringY = fretCentreY + (adjustedTargetString * scaleToAr);
   const stringX = fretCentreX + ((stringY - fretCentreY) / fretSlope);
-  
+
   return { x: stringX, y: stringY };
 }
 
@@ -599,37 +709,7 @@ export function calculateTargetFingerPosition(guitarStart, guitarEnd, targetFret
  * Calculate target finger position using fallback logic if some markers are missing
  */
 export function calculateTargetFingerPositionFromMarkers(markers, targetFret, targetString) {
-  const m1 = markers[1];
-  const m5 = markers[5];
-  if (m1 && m5) {
-    return calculateTargetFingerPosition(m1.center, m5.center, targetFret, targetString);
-  }
-  
-  const m4 = markers[4];
-  const m2 = markers[2];
-  
-  if (m1 && m4) {
-    const deltaX = m4.center.x - m1.center.x;
-    const deltaY = m4.center.y - m1.center.y;
-    const scale = ARUCO_MARKER_ABSOLUTE_POSITIONS[4] / ARUCO_MARKER_ABSOLUTE_POSITIONS[3];
-    const fifthMarker = {
-      x: m1.center.x + deltaX * scale,
-      y: m1.center.y + deltaY * scale
-    };
-    return calculateTargetFingerPosition(m1.center, fifthMarker, targetFret, targetString);
-  }
-  
-  if (m2 && m5) {
-    const deltaX = m5.center.x - m2.center.x;
-    const deltaY = m5.center.y - m2.center.y;
-    const scale = (ARUCO_MARKER_ABSOLUTE_POSITIONS[4] - ARUCO_MARKER_ABSOLUTE_POSITIONS[0]) /
-                  (ARUCO_MARKER_ABSOLUTE_POSITIONS[4] - ARUCO_MARKER_ABSOLUTE_POSITIONS[1]);
-    const firstMarker = {
-      x: m5.center.x - deltaX * scale,
-      y: m5.center.y - deltaY * scale
-    };
-    return calculateTargetFingerPosition(firstMarker, m5.center, targetFret, targetString);
-  }
-  
-  return null;
+  const guitar = calculateGuitarFromMarkers(markers);
+  if (!guitar || !guitar.start || !guitar.end) return null;
+  return calculateTargetFingerPosition(guitar.start, guitar.end, targetFret, targetString);
 }

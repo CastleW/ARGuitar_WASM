@@ -9,6 +9,13 @@ export default function App() {
   const [openCvLoaded, setOpenCvLoaded] = useState(!!window.cv);
   const [activeTab, setActiveTab] = useState('camera'); // 'camera' or 'testsuite'
   const [mediaPipeLoaded, setMediaPipeLoaded] = useState(false);
+  const [cameraSize, setCameraSize] = useState(() => {
+    return localStorage.getItem('arguitar_camera_size') || '1000';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('arguitar_camera_size', cameraSize);
+  }, [cameraSize]);
 
   // Add log entry helper
   const addLog = (message) => {
@@ -105,8 +112,9 @@ export default function App() {
           gap: '16px',
           width: '100%',
           minWidth: 0,
-          maxWidth: activeTab === 'camera' ? '800px' : 'none',
-          margin: activeTab === 'camera' ? '0 auto' : '0'
+          maxWidth: activeTab === 'camera' ? (cameraSize === 'full' ? '100%' : `${cameraSize}px`) : 'none',
+          margin: activeTab === 'camera' ? '0 auto' : '0',
+          transition: 'max-width 0.25s ease'
         }}>
           {activeTab === 'camera' ? (
             <>
@@ -115,6 +123,8 @@ export default function App() {
                 onStatusUpdate={(text) => setStatusText(text)}
                 onMediaPipeLoaded={setMediaPipeLoaded}
                 addLog={addLog}
+                cameraSize={cameraSize}
+                onCameraSizeChange={setCameraSize}
               />
 
               {/* Diagnostic Metrics and Text */}

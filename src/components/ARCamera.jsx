@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Square, Video, Sliders } from 'lucide-react';
+import { Play, Square, Video, Sliders, Maximize2, Minimize2 } from 'lucide-react';
 import { detectMarkers } from '../utils/aruco_detector';
 import {
   calculateGuitarFromMarkers,
@@ -45,8 +45,11 @@ export default function ARCamera({
   openCvLoaded,
   onStatusUpdate,
   onMediaPipeLoaded,
-  addLog
+  addLog,
+  cameraSize = '1000',
+  onCameraSizeChange
 }) {
+  const containerRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const processingCanvasRef = useRef(null);
@@ -54,6 +57,48 @@ export default function ARCamera({
 
   const [cameraActive, setCameraActive] = useState(false);
   const [mediaPipeLoaded, setMediaPipeLoaded] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Sync fullscreen state with browser events (handles Esc key too)
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isFull = !!(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement);
+      setIsFullscreen(isFull);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  const toggleFullscreen = async () => {
+    const elem = containerRef.current;
+    if (!elem) return;
+    try {
+      const isFull = !!(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement);
+      if (!isFull) {
+        if (elem.requestFullscreen) {
+          await elem.requestFullscreen();
+        } else if (elem.webkitRequestFullscreen) {
+          await elem.webkitRequestFullscreen();
+        } else if (elem.msRequestFullscreen) {
+          await elem.msRequestFullscreen();
+        }
+      } else {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+          await document.webkitExitFullscreen();
+        } else if (document.msExitFullscreen) {
+          await document.msExitFullscreen();
+        }
+      }
+    } catch (err) {
+      console.error("Fullscreen toggle error:", err);
+    }
+  };
   const [neckWidthScale, setNeckWidthScale] = useState(() => {
     const saved = localStorage.getItem('arguitar_neck_width');
     return saved ? parseFloat(saved) : 1.6;
@@ -66,7 +111,7 @@ export default function ARCamera({
 
   const [fretScaleLength, setFretScaleLength] = useState(() => {
     const saved = localStorage.getItem('arguitar_fret_scale');
-    return saved ? parseFloat(saved) : 52.0;
+    return saved ? parseFloat(saved) : 49.6;
   });
   const fretScaleLengthRef = useRef(fretScaleLength);
   useEffect(() => {
@@ -292,7 +337,7 @@ export default function ARCamera({
     const { camMatrix, distCoef } = createCameraMats(cv);
 
     detectedMarkers.forEach(m => {
-      if (m.id === 1 || m.id === 5) {
+      if (ARUCO_MARKER_MAP[m.id] !== undefined) {
         try {
           const pose = solvePose(cv, m.corners, camMatrix, distCoef);
           if (pose) {
@@ -509,7 +554,7 @@ export default function ARCamera({
       const y2 = fy - (fWidth / 2) * perpY;
 
       ctx.lineWidth = fretDist === 0 ? 5 : 2; // Thicker line for nut (fret 0)
-      ctx.strokeStyle = fretDist === 0 ? "rgba(6, 182, 212, 0.85)" : "rgba(168, 85, 247, 0.65)";
+      ctx.strokeStyle = fretDist === 0 ? "rgba(6, 182, 212, 0.85)" : "rgba(34, 197, 94, 0.85)"; // High-visibility neon green
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
@@ -520,7 +565,7 @@ export default function ARCamera({
         const idx = FRET_ABSOLUTE_DISTANCES_FROM_NUT.indexOf(fretDist) + 1;
         drawUnmirroredText(ctx, idx.toString(), fx, fy - fWidth / 2 - 8, {
           font: '10px monospace',
-          fillStyle: 'rgba(156, 163, 175, 0.85)',
+          fillStyle: 'rgba(134, 239, 172, 0.9)',
           align: 'center',
           baseline: 'bottom'
         });
@@ -566,22 +611,58 @@ export default function ARCamera({
   }, []);
 
   return (
-    <div className="camera-container glass-panel">
-      <video
-        ref={videoRef}
-        className="camera-feed"
-        playsInline
-        muted
-      />
-      <canvas
-        ref={canvasRef}
-        className="overlay-canvas"
-      />
+    <div
+      ref={containerRef}
+      className="camera-container glass-panel"
+      style={{
+        maxWidth: isFullscreen ? 'none' : (cameraSize === 'full' ? '100%' : `${cameraSize}px`)
+      }}
+    >
+      <div className="camera-viewport">
+        <video
+          ref={videoRef}
+          className="camera-feed"
+          playsInline
+          muted
+        />
+        <canvas
+          ref={canvasRef}
+          className="overlay-canvas"
+        />
+      </div>
+
       {/* Hidden processing canvas */}
       <canvas
         ref={processingCanvasRef}
         style={{ display: 'none' }}
       />
+
+      {/* Quick Fullscreen Button in Top Right */}
+      <button
+        type="button"
+        onClick={toggleFullscreen}
+        style={{
+          position: 'absolute',
+          top: '16px',
+          right: '16px',
+          zIndex: 25,
+          background: 'rgba(15, 23, 42, 0.75)',
+          backdropFilter: 'blur(8px)',
+          border: '1px solid rgba(255, 255, 255, 0.18)',
+          borderRadius: '8px',
+          color: '#fff',
+          padding: '7px',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+          transition: 'all 0.2s ease'
+        }}
+        title={isFullscreen ? "Exit Fullscreen (Esc)" : "Enter Fullscreen"}
+      >
+        {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+      </button>
 
       {/* Active Fret/String HUD Overlay */}
       <div
@@ -589,7 +670,7 @@ export default function ARCamera({
         style={{
           position: 'absolute',
           top: '16px',
-          right: '16px',
+          right: '60px',
           zIndex: 20,
           background: 'rgba(8, 9, 15, 0.85)',
           backdropFilter: 'blur(4px)',
@@ -614,13 +695,15 @@ export default function ARCamera({
         zIndex: 20,
         display: 'flex',
         alignItems: 'center',
-        gap: '16px',
-        background: 'rgba(15, 23, 42, 0.85)',
+        gap: '12px',
+        background: 'rgba(15, 23, 42, 0.9)',
         backdropFilter: 'blur(10px)',
-        padding: '8px 18px',
+        padding: '8px 16px',
         borderRadius: '12px',
         border: '1px solid rgba(255, 255, 255, 0.12)',
-        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)'
+        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
+        maxWidth: 'calc(100% - 32px)',
+        overflowX: 'auto'
       }}>
         {!cameraActive ? (
           <button className="btn-premium" onClick={startCamera}>
@@ -636,13 +719,13 @@ export default function ARCamera({
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '8px',
+          gap: '6px',
           color: 'var(--text-secondary)',
           fontSize: '12px',
           fontFamily: 'var(--font-mono)'
         }}>
           <Sliders size={14} style={{ color: 'var(--accent-cyan)' }} />
-          <span style={{ whiteSpace: 'nowrap' }}>Neck Width:</span>
+          <span style={{ whiteSpace: 'nowrap' }}>Width:</span>
           <input
             type="range"
             min="1.0"
@@ -651,13 +734,13 @@ export default function ARCamera({
             value={neckWidthScale}
             onChange={(e) => setNeckWidthScale(parseFloat(e.target.value))}
             style={{
-              width: '70px',
+              width: '60px',
               accentColor: 'var(--accent-cyan)',
               cursor: 'pointer'
             }}
             title="Adjust visual string spacing across the neck"
           />
-          <span style={{ color: 'var(--accent-cyan)', minWidth: '36px', fontWeight: 'bold' }}>
+          <span style={{ color: 'var(--accent-cyan)', minWidth: '32px', fontWeight: 'bold' }}>
             {neckWidthScale.toFixed(2)}x
           </span>
         </div>
@@ -666,15 +749,15 @@ export default function ARCamera({
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '8px',
+          gap: '6px',
           color: 'var(--text-secondary)',
           fontSize: '12px',
           fontFamily: 'var(--font-mono)',
           borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-          paddingLeft: '12px'
+          paddingLeft: '10px'
         }}>
-          <Sliders size={14} style={{ color: 'var(--accent-purple)' }} />
-          <span style={{ whiteSpace: 'nowrap' }}>Fret Scale:</span>
+          <Sliders size={14} style={{ color: 'var(--accent-green)' }} />
+          <span style={{ whiteSpace: 'nowrap' }}>Scale:</span>
           <input
             type="range"
             min="46.0"
@@ -683,16 +766,76 @@ export default function ARCamera({
             value={fretScaleLength}
             onChange={(e) => setFretScaleLength(parseFloat(e.target.value))}
             style={{
-              width: '70px',
-              accentColor: 'var(--accent-purple)',
+              width: '60px',
+              accentColor: 'var(--accent-green)',
               cursor: 'pointer'
             }}
             title="Adjust 12th fret alignment along the neck"
           />
-          <span style={{ color: 'var(--accent-purple)', minWidth: '46px', fontWeight: 'bold' }}>
+          <span style={{ color: 'var(--accent-green)', minWidth: '42px', fontWeight: 'bold' }}>
             {fretScaleLength.toFixed(1)}cm
           </span>
         </div>
+
+        {/* Video Size Selector */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+          color: 'var(--text-secondary)',
+          fontSize: '12px',
+          fontFamily: 'var(--font-mono)',
+          borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+          paddingLeft: '10px'
+        }}>
+          <span style={{ whiteSpace: 'nowrap', marginRight: '2px' }}>Size:</span>
+          {[
+            { label: '800', value: '800' },
+            { label: '1000', value: '1000' },
+            { label: '1200', value: '1200' },
+            { label: 'Fit', value: 'full' }
+          ].map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => onCameraSizeChange && onCameraSizeChange(opt.value)}
+              style={{
+                padding: '3px 7px',
+                fontSize: '11px',
+                borderRadius: '6px',
+                border: cameraSize === opt.value ? '1px solid var(--accent-cyan)' : '1px solid rgba(255, 255, 255, 0.12)',
+                background: cameraSize === opt.value ? 'rgba(6, 182, 212, 0.25)' : 'rgba(255, 255, 255, 0.05)',
+                color: cameraSize === opt.value ? '#38bdf8' : 'var(--text-secondary)',
+                cursor: 'pointer',
+                fontWeight: cameraSize === opt.value ? 'bold' : 'normal',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Fullscreen Button in Controls Bar */}
+        <button
+          type="button"
+          onClick={toggleFullscreen}
+          className="btn-secondary"
+          style={{
+            padding: '5px 10px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            fontSize: '12px',
+            borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+            cursor: 'pointer',
+            marginLeft: '2px'
+          }}
+          title={isFullscreen ? "Exit Fullscreen (Esc)" : "Enter Fullscreen"}
+        >
+          {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          <span style={{ whiteSpace: 'nowrap' }}>{isFullscreen ? 'Exit' : 'Full'}</span>
+        </button>
       </div>
 
       {/* HUD Info Labels */}

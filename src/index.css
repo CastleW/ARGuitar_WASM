@@ -164,10 +164,11 @@ h6 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 350px;
   gap: 24px;
-  max-width: 1400px;
+  max-width: 1680px;
   margin: 0 auto;
   padding: 24px;
   min-height: calc(100vh - 80px);
+  transition: max-width 0.3s ease;
 }
 
 @media (max-width: 1024px) {
@@ -179,13 +180,43 @@ h6 {
 .camera-container {
   position: relative;
   width: 100%;
-  max-width: 800px;
   aspect-ratio: 4/3;
   overflow: hidden;
   border-radius: 16px;
   background: #000;
   border: 1px solid var(--border-color);
   margin: 0 auto;
+  transition: max-width 0.25s ease;
+}
+
+/* Fullscreen support */
+.camera-container:fullscreen,
+.camera-container:-webkit-full-screen {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  aspect-ratio: auto !important;
+  border-radius: 0 !important;
+  border: none !important;
+  background: #000 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.camera-viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.camera-container:fullscreen .camera-viewport,
+.camera-container:-webkit-full-screen .camera-viewport {
+  position: relative;
+  aspect-ratio: 4/3;
+  width: min(100vw, calc(100vh * (4 / 3)));
+  height: min(100vh, calc(100vw * (3 / 4)));
+  margin: auto;
 }
 
 .camera-feed {
