@@ -725,9 +725,13 @@ export default function ARCamera({
           }
 
           if (crossed.length > 0) {
-            const isDown = deltaS > 0;
-            const isUp = deltaS < 0;
+            // Guitar convention: String 6 = Low E (top), String 1 = High E (bottom)
+            // Downstroke sweeps downwards from String 6 to String 1: deltaS < 0
+            // Upstroke sweeps upwards from String 1 to String 6: deltaS > 0
+            const isDown = deltaS < 0;
+            const isUp = deltaS > 0;
             const dir = isDown ? 'DOWN ↓' : 'UP ↑';
+            const displayCrossed = isDown ? [...crossed].sort((a, b) => b - a) : [...crossed].sort((a, b) => a - b);
 
             // Hybrid Depth Gate & Strum Mode Filter:
             let allowStrum = true;
@@ -746,9 +750,9 @@ export default function ARCamera({
               });
 
               const chordPrefix = activeChord ? `${activeChord.name} ` : '';
-              const strumDesc = crossed.length >= 3 ? `${chordPrefix}STRUM ${dir}` : `${chordPrefix}PICK S:${crossed.join(',')}`;
+              const strumDesc = crossed.length >= 3 ? `${chordPrefix}STRUM ${dir}` : `${chordPrefix}PICK S:${displayCrossed.join(',')}`;
               activeStrumDisplayRef.current = {
-                text: `${strumDesc} [Strings ${crossed.join(',')}]`,
+                text: `${strumDesc} [Strings ${displayCrossed.join(',')}]`,
                 time: timestamp,
                 color: activeChord ? (activeChord.quality === 'major' ? '#10b981' : '#a855f7') : '#f59e0b',
                 chord: activeChord ? activeChord.name : null
