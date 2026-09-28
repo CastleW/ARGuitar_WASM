@@ -16,6 +16,8 @@ import {
 } from '../utils/guitar_math';
 import { detectChordFromFingers, createChordSmoother } from '../utils/chord_detector';
 import { guitarAudio } from '../utils/guitar_audio';
+import SongHighway from './SongHighway';
+import { songEngine } from '../utils/song_engine';
 
 // Helper to draw text un-mirrored on a mirrored canvas context
 const drawUnmirroredText = (ctx, text, x, y, options = {}) => {
@@ -106,6 +108,16 @@ export default function ARCamera({
     captureResolutionRef.current = captureResolution;
     localStorage.setItem('arguitar_capture_res', captureResolution);
   }, [captureResolution]);
+
+  // AR Ghost Frets toggle
+  const [showGhostFrets, setShowGhostFrets] = useState(() => {
+    return localStorage.getItem('arguitar_ghost_frets') !== 'false';
+  });
+  const showGhostFretsRef = useRef(showGhostFrets);
+  useEffect(() => {
+    showGhostFretsRef.current = showGhostFrets;
+    localStorage.setItem('arguitar_ghost_frets', showGhostFrets ? 'true' : 'false');
+  }, [showGhostFrets]);
 
   // Sync fullscreen state with browser events (handles Esc key too)
   useEffect(() => {
@@ -771,8 +783,12 @@ export default function ARCamera({
 
                 if (activeChord && crossed.length >= 3) {
                   guitarAudio.strumChord(activeChord, dir, normalizedVelocity);
+                  songEngine.evaluateStrum(activeChord.short || activeChord.name);
                 } else {
                   guitarAudio.strumStrings(crossed, currentFretted, dir, normalizedVelocity);
+                  if (crossed.length >= 2) {
+                    songEngine.evaluateStrum(null);
+                  }
                 }
               }
             } else {
@@ -860,6 +876,120 @@ export default function ARCamera({
 
     // Highlight fretted positions on the guitar neck for every active fretting finger
     if (neckGeometry) {
+      // Draw AR Ghost Target Fingering for Active Play-Along Song (if enabled)
+      if (showGhostFretsRef.current) {
+        const targetChord = songEngine.getTargetChord();
+        if (targetChord && targetChord.frets) {
+          const { start, dx, dy, len, perpX, perpY, nutNeckWidth } = neckGeometry;
+          const nutMidX = start.x - 18 * (dx / len);
+          const nutMidY = start.y - 18 * (dy / len);
+
+          // 1. Nut indicators: Open ('O') or Muted ('✕')
+          for (let s = 1; s <= 6; s++) {
+            const tString = ((s - 1) / 5 - 0.5) * 0.88;
+            const sx = nutMidX + (tString * nutNeckWidth) * perpX;
+            const sy = nutMidY + (tString * nutNeckWidth) * perpY;
+
+            if (targetChord.open && targetChord.open.includes(s)) {
+              ctx.save();
+              ctx.strokeStyle = '#22c55e';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.arc(sx, sy, 7, 0, 2 * Math.PI);
+              ctx.stroke();
+              drawUnmirroredText(ctx, 'O', sx, sy, {
+                font: 'bold 9px monospace',
+                fillStyle: '#22c55e',
+                align: 'center',
+                baseline: 'middle'
+              });
+              ctx.restore();
+            } else if (targetChord.muted && targetChord.muted.includes(s)) {
+              ctx.save();
+              drawUnmirroredText(ctx, '✕', sx, sy, {
+                font: 'bold 11px monospace',
+                fillStyle: '#ef4444',
+                align: 'center',
+                baseline: 'middle'
+              });
+              ctx.restore();
+            }
+          }
+
+          // 2. Fret targets
+          const nowMs = performance.now();
+          const pulse = 0.5 + 0.5 * Math.sin(nowMs / 180);
+          Object.entries(targetChord.frets).forEach(([strStr, target]) => {
+            const str = parseInt(strStr, 10);
+            const fret = target.fret;
+            const fingerNum = target.finger || 1;
+
+            if (fret > 0 && fret <= 22) {
+              const curDist = FRET_ABSOLUTE_DISTANCES_FROM_NUT[fret - 1];
+              const prevDist = fret === 1 ? 0.0 : FRET_ABSOLUTE_DISTANCES_FROM_NUT[fret - 2];
+              const midFretDist = (curDist + prevDist) / 2;
+
+              const { fx, fy, fWidth } = getFretPositionAndWidth(midFretDist, neckGeometry);
+              const tString = ((str - 1) / 5 - 0.5) * 0.88;
+              const targetX = fx + (tString * fWidth) * perpX;
+              const targetY = fy + (tString * fWidth) * perpY;
+
+              const isFrettedByPlayer = trackedFingers.some(
+                f => f.isActive && f.string === str && f.fret === fret
+              );
+
+              ctx.save();
+              if (isFrettedByPlayer) {
+                // Correct finger placed: glowing emerald checkmark
+                ctx.shadowColor = '#10b981';
+                ctx.shadowBlur = 18;
+                ctx.fillStyle = 'rgba(16, 185, 129, 0.95)';
+                ctx.beginPath();
+                ctx.arc(targetX, targetY, 11, 0, 2 * Math.PI);
+                ctx.fill();
+
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                drawUnmirroredText(ctx, '✓', targetX, targetY, {
+                  font: 'bold 12px monospace',
+                  fillStyle: '#ffffff',
+                  align: 'center',
+                  baseline: 'middle'
+                });
+              } else {
+                // Target to press: pulsing cyan guide with finger number
+                const radius = 9 + pulse * 2.5;
+                ctx.shadowColor = '#06b6d4';
+                ctx.shadowBlur = 14 * pulse;
+
+                // Outer pulse ring
+                ctx.strokeStyle = `rgba(6, 182, 212, ${0.4 + 0.5 * pulse})`;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(targetX, targetY, radius + 3, 0, 2 * Math.PI);
+                ctx.stroke();
+
+                // Inner solid badge
+                ctx.fillStyle = 'rgba(6, 182, 212, 0.88)';
+                ctx.beginPath();
+                ctx.arc(targetX, targetY, 10, 0, 2 * Math.PI);
+                ctx.fill();
+
+                drawUnmirroredText(ctx, fingerNum.toString(), targetX, targetY, {
+                  font: 'bold 11px monospace',
+                  fillStyle: '#ffffff',
+                  align: 'center',
+                  baseline: 'middle'
+                });
+              }
+              ctx.restore();
+            }
+          });
+        }
+      }
+
       const activeFretPoints = [];
 
       trackedFingers.forEach(f => {
@@ -1232,6 +1362,12 @@ export default function ARCamera({
         <canvas
           ref={canvasRef}
           className="overlay-canvas"
+        />
+
+        {/* Interactive Play-Along Song Highway Overlay */}
+        <SongHighway
+          showGhostFrets={showGhostFrets}
+          onToggleGhostFrets={() => setShowGhostFrets(prev => !prev)}
         />
       </div>
 

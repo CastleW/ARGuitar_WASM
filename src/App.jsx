@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import ARCamera from './components/ARCamera';
 import TestSuite from './components/TestSuite';
+import SongStudioPanel from './components/SongStudioPanel';
 import { Info } from 'lucide-react';
 
 export default function App() {
@@ -156,31 +157,22 @@ export default function App() {
         {/* Right Side: Control panel / Info card and logs */}
         <div className="sidebar">
 
-          {/* Instructions Panel */}
-          <div className="glass-panel info-card" style={{ padding: '20px' }}>
-            <h3 style={{ fontSize: '14px', textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '0.05em', marginTop: 0, marginBottom: '12px' }}>
-              Webcam Verification
-            </h3>
-            {activeTab === 'camera' ? (
-              <>
-                <p style={{ fontSize: '13px', lineHeight: '1.5', color: 'var(--text-secondary)', margin: '0 0 12px 0' }}>
-                  This page has been stripped back to only display the raw live camera feed. All heavy library initializations (MediaPipe, OpenCV, Web Audio) are completely disabled.
-                </p>
-                <p style={{ fontSize: '13px', lineHeight: '1.5', color: 'var(--text-secondary)', margin: 0 }}>
-                  Use the <strong>Start Camera</strong> button to verify if browser webcam permissions are operating correctly.
-                </p>
-              </>
-            ) : (
-              <>
-                <p style={{ fontSize: '13px', lineHeight: '1.5', color: 'var(--text-secondary)', margin: '0 0 12px 0' }}>
-                  The Visual Test Suite runs the ArUco marker detector and MediaPipe Hand Landmarker on the original static test images.
-                </p>
-                <p style={{ fontSize: '13px', lineHeight: '1.5', color: 'var(--text-secondary)', margin: 0 }}>
-                  Click <strong>Run Verification Tests</strong> to execute all 38 alignment and fret accuracy tests.
-                </p>
-              </>
-            )}
-          </div>
+          {/* Play-Along Song Studio or Test Suite Info */}
+          {activeTab === 'camera' ? (
+            <SongStudioPanel />
+          ) : (
+            <div className="glass-panel info-card" style={{ padding: '20px' }}>
+              <h3 style={{ fontSize: '14px', textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '0.05em', marginTop: 0, marginBottom: '12px' }}>
+                Test Suite Verification
+              </h3>
+              <p style={{ fontSize: '13px', lineHeight: '1.5', color: 'var(--text-secondary)', margin: '0 0 12px 0' }}>
+                The Visual Test Suite runs the ArUco marker detector and MediaPipe Hand Landmarker on the original static test images.
+              </p>
+              <p style={{ fontSize: '13px', lineHeight: '1.5', color: 'var(--text-secondary)', margin: 0 }}>
+                Click <strong>Run Verification Tests</strong> to execute all 38 alignment and fret accuracy tests.
+              </p>
+            </div>
+          )}
 
           {/* Logs Console */}
           <div className="glass-panel info-card" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minHeight: '200px' }}>
