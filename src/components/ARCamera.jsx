@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings, Cpu, Music, Camera, SwitchCamera } from 'lucide-react';
+import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings, Cpu, Music, Camera, SwitchCamera, Activity, Copy, Check, X } from 'lucide-react';
 import { detectMarkers } from '../utils/aruco_detector';
 import {
   getNeckGeometry,
@@ -83,8 +83,97 @@ export default function ARCamera({
       return { supported: false, renderer: 'Unavailable' };
     }
   });
-  const [perfTimings, setPerfTimings] = useState({ aruco: '0', mp: '0', total: '0' });
-  const perfTimingsRef = useRef({ aruco: '0', mp: '0', total: '0' });
+  const [showProfiler, setShowProfiler] = useState(() => {
+    return localStorage.getItem('arguitar_show_profiler') === 'true';
+  });
+  const showProfilerRef = useRef(showProfiler);
+  useEffect(() => {
+    showProfilerRef.current = showProfiler;
+    localStorage.setItem('arguitar_show_profiler', showProfiler ? 'true' : 'false');
+  }, [showProfiler]);
+
+  const [copiedReport, setCopiedReport] = useState(false);
+
+  const [perfTimings, setPerfTimings] = useState({
+    copy: '0',
+    aruco: '0',
+    mp: '0',
+    math: '0',
+    render: '0',
+    total: '0',
+    fps: 0,
+    fpsAvg: 0,
+    res: '',
+    procRes: '',
+    markers: 0,
+    hands: 0
+  });
+  const perfTimingsRef = useRef({
+    copy: '0',
+    aruco: '0',
+    mp: '0',
+    math: '0',
+    render: '0',
+    total: '0',
+    fps: 0,
+    fpsAvg: 0,
+    res: '',
+    procRes: '',
+    markers: 0,
+    hands: 0
+  });
+  const perfSamplesRef = useRef({
+    copy: [],
+    aruco: [],
+    mp: [],
+    math: [],
+    render: [],
+    total: [],
+    fps: []
+  });
+
+  const handleCopyReport = async () => {
+    const totalMs = parseFloat(perfTimings.total) || 0;
+    const target30Budget = 33.3;
+    const headroom30 = (target30Budget - totalMs).toFixed(1);
+
+    const report = [
+      `### 🎸 ARGuitar Performance Benchmark Report`,
+      `- **Device Platform**: ${navigator.userAgent}`,
+      `- **Viewport**: ${window.innerWidth}x${window.innerHeight} (DPR: ${window.devicePixelRatio || 1})`,
+      `- **CPU Cores**: ${navigator.hardwareConcurrency || 'N/A'}`,
+      `- **GPU Renderer**: ${gpuInfo.renderer || 'Standard'}`,
+      `- **MediaPipe Delegate**: ${mpDelegate}${mpError ? ` (${mpError})` : ''}`,
+      `- **Webcam Stream**: ${perfTimings.res || captureResolution} (Processing: ${perfTimings.procRes || '640x360'})`,
+      `- **Average FPS**: ${perfTimings.fpsAvg || fps} FPS (Live: ${fps} FPS)`,
+      `- **Tracked**: ${perfTimings.markers} markers, ${perfTimings.hands} hand(s)`,
+      ``,
+      `#### Pipeline Latency Breakdown (Averaged over 30 frames):`,
+      `- ⏱️ **Total Frame Time**: ${perfTimings.total} ms ${totalMs <= target30Budget ? `(✅ Within 30 FPS budget, ${headroom30}ms headroom)` : `(⚠️ Exceeds 30 FPS budget by ${Math.abs(headroom30)}ms)`}`,
+      `  * 📸 **Video Copy & Pixel Read**: ${perfTimings.copy} ms`,
+      `  * 🔍 **OpenCV ArUco (WASM)**: ${perfTimings.aruco} ms`,
+      `  * 🤖 **MediaPipe Hand Inference**: ${perfTimings.mp} ms`,
+      `  * 📐 **Neck Geometry & Chords**: ${perfTimings.math} ms`,
+      `  * 🎨 **Canvas 2D Rendering**: ${perfTimings.render} ms`
+    ].join('\n');
+
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(report);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = report;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopiedReport(true);
+      setTimeout(() => setCopiedReport(false), 2500);
+    } catch (e) {
+      console.warn("Failed to copy report:", e);
+    }
+  };
 
   // Audio state (persisted in localStorage)
   const [audioEnabled, setAudioEnabled] = useState(() => {
@@ -701,15 +790,15 @@ export default function ARCamera({
     const ctx = canvas.getContext('2d');
     const procCtx = procCanvas.getContext('2d', { willReadFrequently: true });
 
-    // Draw current frame to hidden processing canvas at decoupled resolution
-    const tArucoStart = performance.now();
+    // Step A: Draw current frame to hidden processing canvas & extract pixels
+    const tCopyStart = performance.now();
     procCtx.drawImage(video, 0, 0, procWidth, procHeight);
     const imgData = procCtx.getImageData(0, 0, procWidth, procHeight);
-
-    // Convert to OpenCV Mat
     let srcMat = cv.matFromImageData(imgData);
+    const tCopyEnd = performance.now();
 
-    // 1. Detect ArUco markers using our custom JS implementation
+    // Step B: Detect ArUco markers using custom JS implementation
+    const tArucoStart = performance.now();
     let detectedMarkers = [];
     let diagnostics = null;
     try {
@@ -737,7 +826,26 @@ export default function ARCamera({
       console.error("Error detecting markers:", e);
     }
     srcMat.delete();
-    perfTimingsRef.current.aruco = (performance.now() - tArucoStart).toFixed(0);
+    const tArucoEnd = performance.now();
+
+    // Step C: Detect hands using MediaPipe
+    const tMpStart = performance.now();
+    let handLandmarks = null;
+    let handLandmarksResults = null;
+    if (mediaPipeLoaded && landmarkerRef.current) {
+      try {
+        handLandmarksResults = landmarkerRef.current.detectForVideo(video, timestamp);
+        if (handLandmarksResults && handLandmarksResults.landmarks) {
+          handLandmarks = handLandmarksResults.landmarks;
+        }
+      } catch (err) {
+        console.error("Error in hand tracking:", err);
+      }
+    }
+    const tMpEnd = performance.now();
+
+    // Step D: Pose & Neck Geometry & Chords & Strumming Math
+    const tMathStart = performance.now();
 
     // Index markers by ID for fast lookup
     const markers = {};
@@ -770,22 +878,6 @@ export default function ARCamera({
       }
     });
 
-    // 2. Detect hands using MediaPipe directly from HTML5 video (zero-copy GPU path)
-    const tMpStart = performance.now();
-    let handLandmarks = null;
-    let handLandmarksResults = null;
-    if (mediaPipeLoaded && landmarkerRef.current) {
-      try {
-        handLandmarksResults = landmarkerRef.current.detectForVideo(video, timestamp);
-        if (handLandmarksResults && handLandmarksResults.landmarks) {
-          handLandmarks = handLandmarksResults.landmarks;
-        }
-      } catch (err) {
-        console.error("Error in hand tracking:", err);
-      }
-    }
-    perfTimingsRef.current.mp = (performance.now() - tMpStart).toFixed(0);
-
     // Update logged IDs if they changed to prevent console spam
     const currentIdsStr = detectedMarkers.map(m => m.id).sort().join(", ");
     if (currentIdsStr !== lastLoggedIdsRef.current) {
@@ -807,18 +899,14 @@ export default function ARCamera({
       }
     }
 
-    // Calculate FPS
+    // Calculate instantaneous FPS
     const timeDelta = (timestamp - lastTimeRef.current) / 1000;
     lastTimeRef.current = timestamp;
     const currentFps = timeDelta > 0 ? Math.round(1 / timeDelta) : 0;
 
-    // Throttle HUD FPS & latency update to ~2.5x/sec so numbers are readable and performant
-    if (timestamp - lastFpsUpdateTimeRef.current >= 400) {
-      lastFpsUpdateTimeRef.current = timestamp;
-      setFps(currentFps);
-      perfTimingsRef.current.total = (performance.now() - tFrameStart).toFixed(0);
-      setPerfTimings({ ...perfTimingsRef.current });
-    }
+    // Step E: 2D Canvas Overlay Rendering
+    const tMathEnd = performance.now();
+    const tRenderStart = performance.now();
 
     // Clear display canvas
     ctx.clearRect(0, 0, width, height);
@@ -1500,6 +1588,52 @@ export default function ARCamera({
       drawMarkerDebug(ctx, markers, neckGeometry);
     }
 
+    const tFrameEnd = performance.now();
+    const dCopy = tCopyEnd - tCopyStart;
+    const dAruco = tArucoEnd - tArucoStart;
+    const dMp = tMpEnd - tMpStart;
+    const dMath = tMathEnd - tMathStart;
+    const dRender = tFrameEnd - tRenderStart;
+    const dTotal = tFrameEnd - tFrameStart;
+
+    // Collect sliding window samples (max 30 items)
+    const samples = perfSamplesRef.current;
+    const pushSample = (arr, val) => {
+      arr.push(val);
+      if (arr.length > 30) arr.shift();
+    };
+    pushSample(samples.copy, dCopy);
+    pushSample(samples.aruco, dAruco);
+    pushSample(samples.mp, dMp);
+    pushSample(samples.math, dMath);
+    pushSample(samples.render, dRender);
+    pushSample(samples.total, dTotal);
+    pushSample(samples.fps, currentFps);
+
+    // Throttle HUD & Profiler state update to ~2.5x/sec so state updates don't hurt FPS
+    if (timestamp - lastFpsUpdateTimeRef.current >= 400) {
+      lastFpsUpdateTimeRef.current = timestamp;
+      setFps(currentFps);
+
+      const avg = (arr) => arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1) : '0';
+      const updated = {
+        copy: avg(samples.copy),
+        aruco: avg(samples.aruco),
+        mp: avg(samples.mp),
+        math: avg(samples.math),
+        render: avg(samples.render),
+        total: avg(samples.total),
+        fps: currentFps,
+        fpsAvg: Math.round(parseFloat(avg(samples.fps)) || currentFps),
+        res: `${width}x${height}`,
+        procRes: `${procWidth}x${procHeight}`,
+        markers: detectedMarkers.length,
+        hands: handLandmarks ? handLandmarks.length : 0
+      };
+      perfTimingsRef.current = updated;
+      setPerfTimings(updated);
+    }
+
     loopRef.current = requestAnimationFrame(processFrame);
   };
 
@@ -2098,6 +2232,156 @@ export default function ARCamera({
           gap: '8px',
           maxWidth: 'calc(100% - 32px)'
         }}>
+          {/* Detailed Performance Profiler Dashboard (Toggled via Profiler button or HUD) */}
+          {showProfiler && (
+            <div style={{
+              background: 'rgba(15, 23, 42, 0.96)',
+              backdropFilter: 'blur(16px)',
+              borderRadius: '12px',
+              border: '1px solid rgba(6, 182, 212, 0.3)',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.6), 0 0 20px rgba(6, 182, 212, 0.15)',
+              padding: '12px 16px',
+              width: '100%',
+              maxWidth: '520px',
+              color: '#e2e8f0',
+              fontFamily: 'var(--font-mono)',
+              fontSize: '11px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '10px'
+            }}>
+              {/* Header with Title, Live FPS & Copy Button */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Activity size={14} style={{ color: 'var(--accent-cyan)' }} />
+                  <span style={{ fontWeight: 'bold', fontSize: '12px', color: '#fff' }}>Performance Profiler</span>
+                  <span style={{
+                    fontSize: '10px',
+                    padding: '1px 6px',
+                    borderRadius: '999px',
+                    background: cameraActive ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                    color: cameraActive ? '#86efac' : '#fca5a5',
+                    border: cameraActive ? '1px solid rgba(34, 197, 94, 0.4)' : '1px solid rgba(239, 68, 68, 0.4)'
+                  }}>
+                    {cameraActive ? `${fps} FPS` : 'Offline'}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={handleCopyReport}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '3px 8px',
+                      fontSize: '11px',
+                      borderRadius: '6px',
+                      border: copiedReport ? '1px solid #22c55e' : '1px solid rgba(255, 255, 255, 0.18)',
+                      background: copiedReport ? 'rgba(34, 197, 94, 0.25)' : 'rgba(255, 255, 255, 0.08)',
+                      color: copiedReport ? '#86efac' : '#cbd5e1',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                    title="Copy formatted benchmark report to clipboard"
+                  >
+                    {copiedReport ? <Check size={12} /> : <Copy size={12} />}
+                    <span>{copiedReport ? 'Copied!' : 'Copy Stats'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowProfiler(false)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#94a3b8',
+                      cursor: 'pointer',
+                      padding: '2px',
+                      display: 'flex',
+                      alignItems: 'center'
+                    }}
+                    title="Close Profiler"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Stage Breakdown Bars & Latencies */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {[
+                  { label: 'MediaPipe Hands', time: perfTimings.mp, color: '#a855f7', desc: 'Hand landmarker inference (GPU/CPU)' },
+                  { label: 'OpenCV ArUco', time: perfTimings.aruco, color: '#06b6d4', desc: 'Marker quad search & bit decoding' },
+                  { label: 'Video Buffer Copy', time: perfTimings.copy, color: '#f59e0b', desc: 'Video to canvas & pixel extraction' },
+                  { label: 'Neck & Chord Math', time: perfTimings.math, color: '#22c55e', desc: 'Pose solve, guitar raycast, chord smoother' },
+                  { label: '2D Canvas Render', time: perfTimings.render, color: '#ec4899', desc: 'Frets, strings, bones, ghost fingering' }
+                ].map((stage) => {
+                  const t = parseFloat(stage.time) || 0;
+                  const totalT = Math.max(parseFloat(perfTimings.total) || 1, 1);
+                  const pct = Math.min(100, Math.round((t / totalT) * 100));
+                  return (
+                    <div key={stage.label} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }} title={stage.desc}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10.5px' }}>
+                        <span style={{ color: '#cbd5e1' }}>{stage.label}</span>
+                        <span style={{ color: stage.color, fontWeight: 'bold' }}>
+                          {stage.time}ms <span style={{ color: '#64748b', fontWeight: 'normal' }}>({pct}%)</span>
+                        </span>
+                      </div>
+                      <div style={{
+                        height: '4px',
+                        borderRadius: '2px',
+                        background: 'rgba(255, 255, 255, 0.08)',
+                        overflow: 'hidden'
+                      }}>
+                        <div style={{
+                          height: '100%',
+                          width: `${pct}%`,
+                          background: stage.color,
+                          borderRadius: '2px',
+                          transition: 'width 0.2s ease'
+                        }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Budget Bar comparison against 33.3ms (30fps) and 16.6ms (60fps) */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                background: 'rgba(0, 0, 0, 0.3)',
+                padding: '4px 8px',
+                borderRadius: '6px',
+                fontSize: '10px'
+              }}>
+                <span style={{ color: '#94a3b8' }}>Total Frame: <strong style={{ color: parseFloat(perfTimings.total) <= 33.3 ? '#86efac' : '#f87171' }}>{perfTimings.total}ms</strong></span>
+                <span style={{ color: '#64748b' }}>Target: 33.3ms (30 FPS) • 16.6ms (60 FPS)</span>
+              </div>
+
+              {/* Device Telemetry Badges */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
+                gap: '6px',
+                fontSize: '9.5px',
+                color: '#94a3b8',
+                background: 'rgba(255, 255, 255, 0.03)',
+                padding: '6px 8px',
+                borderRadius: '6px',
+                border: '1px solid rgba(255, 255, 255, 0.06)'
+              }}>
+                <div>GPU: <span style={{ color: '#cbd5e1' }}>{gpuInfo.renderer ? gpuInfo.renderer.split('(')[0].slice(0, 18) : 'Standard'}</span></div>
+                <div>MP Backend: <span style={{ color: mpDelegate === 'GPU' ? '#86efac' : '#fca5a5' }}>{mpDelegate}</span></div>
+                <div>Resolution: <span style={{ color: '#cbd5e1' }}>{perfTimings.res || captureResolution} ({perfTimings.procRes || '640x360'})</span></div>
+                <div>Cores: <span style={{ color: '#cbd5e1' }}>{navigator.hardwareConcurrency || 'N/A'}</span></div>
+              </div>
+            </div>
+          )}
+
           {/* Secondary Tuning / Calibration Drawer (Toggled via Options button) */}
           {showAdvancedControls && (
             <div style={{
@@ -2344,6 +2628,33 @@ export default function ARCamera({
               >
                 🛠️ {showMarkerDebug ? 'Hide Debug' : 'Debug Rays'}
               </button>
+
+              {/* Performance Profiler Toggle */}
+              <button
+                type="button"
+                onClick={() => setShowProfiler(prev => !prev)}
+                style={{
+                  padding: '3px 8px',
+                  fontSize: '11px',
+                  borderRadius: '6px',
+                  border: showProfiler ? '1px solid #06b6d4' : '1px solid rgba(255, 255, 255, 0.14)',
+                  background: showProfiler ? 'rgba(6, 182, 212, 0.25)' : 'rgba(255, 255, 255, 0.05)',
+                  color: showProfiler ? '#38bdf8' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  fontWeight: showProfiler ? 'bold' : 'normal',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  whiteSpace: 'nowrap',
+                  borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+                  marginLeft: '4px',
+                  transition: 'all 0.15s ease'
+                }}
+                title="Toggle live hardware execution profiler & telemetry"
+              >
+                <Activity size={12} color={showProfiler ? '#38bdf8' : 'var(--text-secondary)'} />
+                <span>{showProfiler ? 'Hide Profiler' : '⚡ Profiler'}</span>
+              </button>
             </div>
           )}
 
@@ -2543,19 +2854,25 @@ export default function ARCamera({
           </div>
 
           {/* Real-time frame latency breakdown */}
-          <div style={{
-            fontSize: '10px',
-            fontFamily: 'var(--font-mono)',
-            background: 'rgba(15, 23, 42, 0.85)',
-            backdropFilter: 'blur(6px)',
-            padding: '3px 8px',
-            borderRadius: '6px',
-            color: '#94a3b8',
-            border: '1px solid rgba(255, 255, 255, 0.1)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px'
-          }}>
+          <div
+            onClick={() => setShowProfiler(prev => !prev)}
+            style={{
+              fontSize: '10px',
+              fontFamily: 'var(--font-mono)',
+              background: 'rgba(15, 23, 42, 0.85)',
+              backdropFilter: 'blur(6px)',
+              padding: '3px 8px',
+              borderRadius: '6px',
+              color: '#94a3b8',
+              border: showProfiler ? '1px solid #06b6d4' : '1px solid rgba(255, 255, 255, 0.1)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              cursor: 'pointer'
+            }}
+            title="Click to toggle detailed performance profiler"
+          >
+            <Activity size={10} color={showProfiler ? '#38bdf8' : '#64748b'} />
             <span>MP: <strong style={{ color: mpDelegate === 'GPU' ? '#86efac' : '#fca5a5' }}>{perfTimings.mp}ms</strong></span>
             <span style={{ opacity: 0.4 }}>•</span>
             <span>ArUco: <strong style={{ color: '#cbd5e1' }}>{perfTimings.aruco}ms</strong></span>
