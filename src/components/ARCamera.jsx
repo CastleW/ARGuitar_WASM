@@ -103,6 +103,12 @@ export default function ARCamera({
   const [perfTimings, setPerfTimings] = useState({ aruco: '0', mp: '0', total: '0' });
   const perfTimingsRef = useRef({ aruco: '0', mp: '0', total: '0' });
 
+  // ArUco marker persistence and cadence refs
+  const frameCountRef = useRef(0);
+  const lastDetectedMarkersRef = useRef([]);
+  const lastMarkerPosesRef = useRef({});
+  const lastNeckGeometryRef = useRef(null);
+
   // Audio state (persisted in localStorage)
   const [audioEnabled, setAudioEnabled] = useState(() => {
     const saved = localStorage.getItem('arguitar_audio_enabled');
@@ -429,8 +435,8 @@ export default function ARCamera({
     const height = video.videoHeight;
 
     // Decouple ArUco OpenCV processing canvas from full display resolution
-    // Downscaling to 640px max width eliminates mobile GPU readback stalls (~80ms -> <2ms)
-    const MAX_PROC_WIDTH = 640;
+    // Downscaling to 480px max width eliminates mobile GPU readback stalls (~80ms -> <1ms)
+    const MAX_PROC_WIDTH = 480;
     const procWidth = width > MAX_PROC_WIDTH ? MAX_PROC_WIDTH : width;
     const procHeight = width > MAX_PROC_WIDTH ? (Math.round((height / width) * MAX_PROC_WIDTH) & ~1) : height;
     const scaleX = width / procWidth;
@@ -453,73 +459,84 @@ export default function ARCamera({
     const ctx = canvas.getContext('2d');
     const procCtx = procCanvas.getContext('2d', { willReadFrequently: true });
 
-    // Draw current frame to hidden processing canvas at decoupled resolution
-    const tArucoStart = performance.now();
-    procCtx.drawImage(video, 0, 0, procWidth, procHeight);
-    const imgData = procCtx.getImageData(0, 0, procWidth, procHeight);
+    frameCountRef.current++;
+    // ArUco Cadence: Run marker detection every 2nd frame once guitar is detected,
+    // or every frame if no markers are currently tracked.
+    const shouldRunAruco = (lastDetectedMarkersRef.current.length === 0) || (frameCountRef.current % 2 === 0);
 
-    // Convert to OpenCV Mat
-    let srcMat = cv.matFromImageData(imgData);
-
-    // 1. Detect ArUco markers using our custom JS implementation
-    let detectedMarkers = [];
+    let detectedMarkers = lastDetectedMarkersRef.current;
+    let markerPoses = lastMarkerPosesRef.current;
     let diagnostics = null;
-    try {
-      const result = detectMarkers(cv, srcMat);
-      detectedMarkers = result.markers || [];
-      diagnostics = result.diagnostics;
 
-      // Scale detected marker coordinates back to full video stream resolution
-      if (scaleX !== 1 || scaleY !== 1) {
-        for (let i = 0; i < detectedMarkers.length; i++) {
-          const m = detectedMarkers[i];
-          if (m.corners) {
-            for (let c = 0; c < m.corners.length; c++) {
-              m.corners[c].x *= scaleX;
-              m.corners[c].y *= scaleY;
+    if (shouldRunAruco) {
+      const tArucoStart = performance.now();
+      procCtx.drawImage(video, 0, 0, procWidth, procHeight);
+      const imgData = procCtx.getImageData(0, 0, procWidth, procHeight);
+      let srcMat = cv.matFromImageData(imgData);
+
+      try {
+        const result = detectMarkers(cv, srcMat);
+        detectedMarkers = result.markers || [];
+        diagnostics = result.diagnostics;
+
+        // Scale detected marker coordinates back to full video stream resolution
+        if (scaleX !== 1 || scaleY !== 1) {
+          for (let i = 0; i < detectedMarkers.length; i++) {
+            const m = detectedMarkers[i];
+            if (m.corners) {
+              for (let c = 0; c < m.corners.length; c++) {
+                m.corners[c].x *= scaleX;
+                m.corners[c].y *= scaleY;
+              }
+            }
+            if (m.center) {
+              m.center.x *= scaleX;
+              m.center.y *= scaleY;
             }
           }
-          if (m.center) {
-            m.center.x *= scaleX;
-            m.center.y *= scaleY;
+        }
+      } catch (e) {
+        console.error("Error detecting markers:", e);
+      }
+      srcMat.delete();
+
+      // Solve poses (3D positions) of markers for perspective correction (cached by resolution)
+      const freshPoses = {};
+      if (!cameraMatsRef.current.camMatrix || cameraMatsRef.current.width !== width || cameraMatsRef.current.height !== height) {
+        if (cameraMatsRef.current.camMatrix) {
+          cameraMatsRef.current.camMatrix.delete();
+          cameraMatsRef.current.distCoef.delete();
+        }
+        const { camMatrix, distCoef } = createCameraMats(cv, width, height);
+        cameraMatsRef.current = { width, height, camMatrix, distCoef };
+      }
+      const { camMatrix, distCoef } = cameraMatsRef.current;
+
+      detectedMarkers.forEach(m => {
+        if (ARUCO_MARKER_MAP[m.id] !== undefined) {
+          try {
+            const pose = solvePose(cv, m.corners, camMatrix, distCoef);
+            if (pose) {
+              freshPoses[m.id] = pose.tvec; // [x, y, z]
+            }
+          } catch (e) {
+            console.error("Error solving pose for marker:", m.id, e);
           }
         }
-      }
-    } catch (e) {
-      console.error("Error detecting markers:", e);
+      });
+
+      lastDetectedMarkersRef.current = detectedMarkers;
+      lastMarkerPosesRef.current = freshPoses;
+      markerPoses = freshPoses;
+      perfTimingsRef.current.aruco = (performance.now() - tArucoStart).toFixed(0);
+    } else {
+      perfTimingsRef.current.aruco = '0';
     }
-    srcMat.delete();
-    perfTimingsRef.current.aruco = (performance.now() - tArucoStart).toFixed(0);
 
     // Index markers by ID for fast lookup
     const markers = {};
     detectedMarkers.forEach(m => {
       markers[m.id] = m;
-    });
-
-    // Solve poses (3D positions) of markers for perspective correction (cached by resolution)
-    const markerPoses = {};
-    if (!cameraMatsRef.current.camMatrix || cameraMatsRef.current.width !== width || cameraMatsRef.current.height !== height) {
-      if (cameraMatsRef.current.camMatrix) {
-        cameraMatsRef.current.camMatrix.delete();
-        cameraMatsRef.current.distCoef.delete();
-      }
-      const { camMatrix, distCoef } = createCameraMats(cv, width, height);
-      cameraMatsRef.current = { width, height, camMatrix, distCoef };
-    }
-    const { camMatrix, distCoef } = cameraMatsRef.current;
-
-    detectedMarkers.forEach(m => {
-      if (ARUCO_MARKER_MAP[m.id] !== undefined) {
-        try {
-          const pose = solvePose(cv, m.corners, camMatrix, distCoef);
-          if (pose) {
-            markerPoses[m.id] = pose.tvec; // [x, y, z]
-          }
-        } catch (e) {
-          console.error("Error solving pose for marker:", m.id, e);
-        }
-      }
     });
 
     // 2. Detect hands using MediaPipe directly from HTML5 video (zero-copy GPU path)
@@ -576,7 +593,12 @@ export default function ARCamera({
     ctx.clearRect(0, 0, width, height);
 
     // 2. Process Guitar Geometry
-    const neckGeometry = getNeckGeometry(markers, neckWidthScaleRef.current, markerPoses, fretScaleLengthRef.current);
+    let neckGeometry = getNeckGeometry(markers, neckWidthScaleRef.current, markerPoses, fretScaleLengthRef.current);
+    if (neckGeometry) {
+      lastNeckGeometryRef.current = neckGeometry;
+    } else if (lastNeckGeometryRef.current) {
+      neckGeometry = lastNeckGeometryRef.current;
+    }
 
     if (neckGeometry) {
       // Draw guitar frets, strum zone, and extended vibrating strings
