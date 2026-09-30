@@ -197,7 +197,8 @@ h6 {
 
 /* Fullscreen support */
 .camera-container:fullscreen,
-.camera-container:-webkit-full-screen {
+.camera-container:-webkit-full-screen,
+.camera-container.is-fullscreen {
   width: 100vw !important;
   height: 100vh !important;
   max-width: none !important;
@@ -209,6 +210,7 @@ h6 {
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
+  overflow: hidden !important;
 }
 
 .camera-viewport {
@@ -219,19 +221,28 @@ h6 {
 }
 
 .camera-container:fullscreen .camera-viewport,
-.camera-container:-webkit-full-screen .camera-viewport {
-  position: relative;
-  aspect-ratio: 16/9;
-  width: min(100vw, calc(100vh * (16 / 9)));
-  height: min(100vh, calc(100vw * (9 / 16)));
-  margin: auto;
+.camera-container:-webkit-full-screen .camera-viewport,
+.camera-container.is-fullscreen .camera-viewport {
+  position: relative !important;
+  aspect-ratio: 16/9 !important;
+  width: min(100vw, calc(100vh * (16 / 9))) !important;
+  height: min(100vh, calc(100vw * (9 / 16))) !important;
+  max-width: 100vw !important;
+  max-height: 100vh !important;
+  min-height: 0 !important;
+  margin: auto !important;
 }
 
 .camera-container.res-4-3:fullscreen .camera-viewport,
-.camera-container.res-4-3:-webkit-full-screen .camera-viewport {
-  aspect-ratio: 4/3;
-  width: min(100vw, calc(100vh * (4 / 3)));
-  height: min(100vh, calc(100vw * (3 / 4)));
+.camera-container.res-4-3:-webkit-full-screen .camera-viewport,
+.camera-container.res-4-3.is-fullscreen .camera-viewport {
+  aspect-ratio: 4/3 !important;
+  width: min(100vw, calc(100vh * (4 / 3))) !important;
+  height: min(100vh, calc(100vw * (3 / 4))) !important;
+  max-width: 100vw !important;
+  max-height: 100vh !important;
+  min-height: 0 !important;
+  margin: auto !important;
 }
 
 .camera-feed {
@@ -240,7 +251,7 @@ h6 {
   left: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: fill; /* Lock 1:1 with canvas; viewport preserves stream aspect ratio */
   transform: scaleX(-1);
   /* Mirror camera feed */
 }

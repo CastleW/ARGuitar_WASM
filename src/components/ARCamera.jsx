@@ -1407,20 +1407,29 @@ export default function ARCamera({
   return (
     <div
       ref={containerRef}
-      className={`camera-container glass-panel ${captureResolution === '480p' ? 'res-4-3' : 'res-16-9'}`}
+      className={`camera-container glass-panel ${captureResolution === '480p' ? 'res-4-3' : 'res-16-9'} ${isFullscreen ? 'is-fullscreen' : ''}`}
       style={{
         width: '100%',
-        minHeight: isFullscreen ? 'none' : '480px',
+        minHeight: isFullscreen ? '0' : '480px',
         maxWidth: isFullscreen ? 'none' : (cameraSize === 'full' ? '100%' : `${cameraSize}px`),
         aspectRatio: isFullscreen ? 'auto' : (captureResolution === '480p' ? '4/3' : '16/9')
       }}
     >
       <div
         className="camera-viewport"
-        style={{
+        style={isFullscreen ? {
+          position: 'relative',
+          width: captureResolution === '480p' ? 'min(100vw, calc(100vh * (4 / 3)))' : 'min(100vw, calc(100vh * (16 / 9)))',
+          height: captureResolution === '480p' ? 'min(100vh, calc(100vw * (3 / 4)))' : 'min(100vh, calc(100vw * (9 / 16)))',
+          maxWidth: '100vw',
+          maxHeight: '100vh',
+          aspectRatio: captureResolution === '480p' ? '4/3' : '16/9',
+          minHeight: '0',
+          margin: 'auto'
+        } : {
           width: '100%',
           height: '100%',
-          minHeight: isFullscreen ? 'none' : '480px',
+          minHeight: '480px',
           aspectRatio: captureResolution === '480p' ? '4/3' : '16/9'
         }}
       >
