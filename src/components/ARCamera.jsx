@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings, Cpu, Music } from 'lucide-react';
+import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings, Cpu, Music, Camera, SwitchCamera } from 'lucide-react';
 import { detectMarkers } from '../utils/aruco_detector';
 import {
   getNeckGeometry,
@@ -16,37 +16,19 @@ import { guitarAudio } from '../utils/guitar_audio';
 import SongHighway from './SongHighway';
 import { songEngine } from '../utils/song_engine';
 
-// Helper to draw text un-mirrored on a mirrored canvas context
-const drawUnmirroredText = (ctx, text, x, y, options = {}) => {
-  const {
-    font = '12px monospace',
-    fillStyle = '#fff',
-    align = 'center',
-    baseline = 'middle'
-  } = options;
-
-  ctx.save();
-  ctx.font = font;
-  ctx.fillStyle = fillStyle;
-  ctx.textAlign = align;
-  ctx.textBaseline = baseline;
-
-  // Translate to the target coordinate
-  ctx.translate(x, y);
-  // Mirror horizontally
-  ctx.scale(-1, 1);
-
-  // Draw text at origin
-  ctx.fillText(text, 0, 0);
-
-  ctx.restore();
-};
-
 // Resolution presets for webcam capture
 const RESOLUTION_PRESETS = {
   '720p':  { width: 1280, height: 720,  label: '720p HD' },
   '480p':  { width: 640,  height: 480,  label: '480p VGA' },
   '1080p': { width: 1920, height: 1080, label: '1080p FHD' }
+};
+
+// Detect if running on a mobile device/tablet (which physically has front and back cameras)
+const isMobileDevice = () => {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent;
+  const isTouchMac = /Macintosh/i.test(ua) && (navigator.maxTouchPoints || 0) > 1; // iPad Pro
+  return /Android|iPhone|iPad|iPod/i.test(ua) || isTouchMac;
 };
 
 // Configuration for all 5 fingers of the fretting hand
@@ -154,6 +136,112 @@ export default function ARCamera({
     localStorage.setItem('arguitar_marker_debug', showMarkerDebug ? 'true' : 'false');
   }, [showMarkerDebug]);
 
+  // Camera facing mode ('user' for front/selfie, 'environment' for back) & device selection
+  const [facingMode, setFacingMode] = useState(() => {
+    const saved = localStorage.getItem('arguitar_facing_mode');
+    if (saved) {
+      // Desktop Mac/PC webcams do not have an 'environment' camera; auto-heal back to 'user'
+      if (!isMobileDevice() && saved === 'environment') {
+        localStorage.setItem('arguitar_facing_mode', 'user');
+        return 'user';
+      }
+      return saved;
+    }
+    return 'user';
+  });
+  const facingModeRef = useRef(facingMode);
+  useEffect(() => {
+    facingModeRef.current = facingMode;
+    localStorage.setItem('arguitar_facing_mode', facingMode);
+  }, [facingMode]);
+
+  const [selectedDeviceId, setSelectedDeviceId] = useState(() => {
+    return localStorage.getItem('arguitar_camera_device_id') || '';
+  });
+  const selectedDeviceIdRef = useRef(selectedDeviceId);
+  useEffect(() => {
+    selectedDeviceIdRef.current = selectedDeviceId;
+    if (selectedDeviceId) {
+      localStorage.setItem('arguitar_camera_device_id', selectedDeviceId);
+    } else {
+      localStorage.removeItem('arguitar_camera_device_id');
+    }
+  }, [selectedDeviceId]);
+
+  const [availableCameras, setAvailableCameras] = useState([]);
+  const [isMirrored, setIsMirrored] = useState(facingMode !== 'environment');
+  const isMirroredRef = useRef(isMirrored);
+  useEffect(() => {
+    isMirroredRef.current = isMirrored;
+  }, [isMirrored]);
+
+  const enumerateCameras = async () => {
+    try {
+      if (!navigator.mediaDevices?.enumerateDevices) return;
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(d => d.kind === 'videoinput');
+      setAvailableCameras(videoDevices);
+    } catch (err) {
+      console.warn("Could not enumerate video devices:", err);
+    }
+  };
+
+  useEffect(() => {
+    let active = true;
+    if (navigator.mediaDevices?.enumerateDevices) {
+      navigator.mediaDevices.enumerateDevices().then(devices => {
+        if (active) {
+          setAvailableCameras(devices.filter(d => d.kind === 'videoinput'));
+        }
+      }).catch(err => {
+        console.warn("Could not enumerate video devices:", err);
+      });
+
+      const onDeviceChange = () => {
+        navigator.mediaDevices.enumerateDevices().then(devices => {
+          if (active) {
+            setAvailableCameras(devices.filter(d => d.kind === 'videoinput'));
+          }
+        }).catch(err => {
+          console.warn("Could not enumerate video devices:", err);
+        });
+      };
+
+      navigator.mediaDevices.addEventListener('devicechange', onDeviceChange);
+      return () => {
+        active = false;
+        navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange);
+      };
+    }
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Helper to draw text in readable orientation (cancels horizontal flip when mirrored)
+  const drawUnmirroredText = (ctx, text, x, y, options = {}) => {
+    const {
+      font = '12px monospace',
+      fillStyle = '#fff',
+      align = 'center',
+      baseline = 'middle'
+    } = options;
+
+    ctx.save();
+    ctx.font = font;
+    ctx.fillStyle = fillStyle;
+    ctx.textAlign = align;
+    ctx.textBaseline = baseline;
+
+    ctx.translate(x, y);
+    if (isMirroredRef.current) {
+      ctx.scale(-1, 1);
+    }
+
+    ctx.fillText(text, 0, 0);
+    ctx.restore();
+  };
+
   // Sync fullscreen state with browser events (handles Esc key too)
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -231,23 +319,113 @@ export default function ARCamera({
   const chordSmootherRef = useRef(createChordSmoother(5, 320));
   const activeChordRef = useRef(null);
 
-  // Start webcam feed
-  const startCamera = async (targetRes = captureResolutionRef.current) => {
-    try {
-      const resConfig = RESOLUTION_PRESETS[targetRes] || RESOLUTION_PRESETS['720p'];
-      console.log(`Requesting webcam access (${resConfig.label}: ${resConfig.width}x${resConfig.height})...`);
-      if (addLog) addLog(`Requesting webcam access (${resConfig.label})...`);
+  // Helper to obtain media stream with progressive multi-tier fallback
+  // Prevents 'Requested device not found' on Mac Mini / external USB webcams that lack facingMode metadata
+  const getCameraStream = async (resConfig, deviceId, facing) => {
+    const isMobile = isMobileDevice();
 
-      const stream = await navigator.mediaDevices.getUserMedia({
+    // Tier 1: If specific deviceId was selected, try that device first
+    if (deviceId) {
+      try {
+        console.log(`[Camera] Tier 1: Requesting deviceId "${deviceId}" (${resConfig.label})...`);
+        return await navigator.mediaDevices.getUserMedia({
+          video: {
+            deviceId: { ideal: deviceId },
+            width: { ideal: resConfig.width },
+            height: { ideal: resConfig.height },
+            frameRate: { ideal: 30 }
+          }
+        });
+      } catch (e1) {
+        console.warn(`[Camera] Tier 1 (deviceId) failed: ${e1.name}: ${e1.message}`);
+      }
+    }
+
+    // Tier 2: Try facingMode on mobile or when facing is explicitly requested
+    if (facing && (isMobile || facing === 'user')) {
+      try {
+        console.log(`[Camera] Tier 2: Requesting facingMode "${facing}" (${resConfig.label})...`);
+        return await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: facing },
+            width: { ideal: resConfig.width },
+            height: { ideal: resConfig.height },
+            frameRate: { ideal: 30 }
+          }
+        });
+      } catch (e2) {
+        console.warn(`[Camera] Tier 2 (facingMode) failed: ${e2.name}: ${e2.message}`);
+      }
+    }
+
+    // Tier 3: Standard unconstrained resolution preset (works 100% on Mac Mini & desktop webcams)
+    try {
+      console.log(`[Camera] Tier 3: Requesting standard unconstrained resolution (${resConfig.label}: ${resConfig.width}x${resConfig.height})...`);
+      return await navigator.mediaDevices.getUserMedia({
         video: {
           width: { ideal: resConfig.width },
           height: { ideal: resConfig.height },
           frameRate: { ideal: 30 }
         }
       });
+    } catch (e3) {
+      console.warn(`[Camera] Tier 3 (unconstrained) failed: ${e3.name}: ${e3.message}`);
+    }
+
+    // Tier 4: Absolute bare fallback (any available camera feed)
+    console.log('[Camera] Tier 4: Bare video fallback { video: true }');
+    return await navigator.mediaDevices.getUserMedia({ video: true });
+  };
+
+  // Start webcam feed with camera device & facing mode support
+  const startCamera = async (
+    targetRes = captureResolutionRef.current,
+    targetDeviceId = selectedDeviceIdRef.current,
+    targetFacing = facingModeRef.current
+  ) => {
+    try {
+      const resKey = (typeof targetRes === 'string' && RESOLUTION_PRESETS[targetRes])
+        ? targetRes
+        : captureResolutionRef.current;
+      const deviceId = (typeof targetDeviceId === 'string') ? targetDeviceId : selectedDeviceIdRef.current;
+      const facing = (typeof targetFacing === 'string') ? targetFacing : facingModeRef.current;
+
+      const resConfig = RESOLUTION_PRESETS[resKey] || RESOLUTION_PRESETS['720p'];
+      console.log(`Requesting webcam access (${resConfig.label}: ${resConfig.width}x${resConfig.height})...`);
+      if (addLog) addLog(`Requesting webcam access (${resConfig.label})...`);
+
+      const stream = await getCameraStream(resConfig, deviceId, facing);
 
       console.log(`Webcam access granted! (${resConfig.label})`);
       if (addLog) addLog(`Webcam access granted! (${resConfig.label})`);
+
+      // Determine active camera settings from the video track
+      const track = stream.getVideoTracks()[0];
+      if (track) {
+        const settings = track.getSettings ? track.getSettings() : {};
+        const activeFacing = settings.facingMode;
+        if (activeFacing) {
+          setFacingMode(activeFacing);
+          facingModeRef.current = activeFacing;
+          setIsMirrored(activeFacing !== 'environment');
+        } else {
+          // External/desktop webcam without facingMode metadata
+          if (!isMobileDevice() && facingModeRef.current === 'environment') {
+            setFacingMode('user');
+            facingModeRef.current = 'user';
+            localStorage.setItem('arguitar_facing_mode', 'user');
+          }
+          setIsMirrored(facingModeRef.current !== 'environment');
+        }
+
+        if (settings.deviceId) {
+          setSelectedDeviceId(settings.deviceId);
+          selectedDeviceIdRef.current = settings.deviceId;
+        }
+      }
+
+      // Enumerate devices now that permission has unlocked camera labels
+      await enumerateCameras();
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -268,8 +446,14 @@ export default function ARCamera({
       }
     } catch (err) {
       console.error("Error accessing webcam:", err);
-      if (addLog) addLog("❌ Webcam Error: " + err.message);
-      alert("Error accessing webcam: " + err.message);
+      let userMsg = err.message;
+      if (err.name === 'NotFoundError' || err.message?.toLowerCase().includes('not found')) {
+        userMsg = "No webcam detected. Please ensure your camera is plugged in and recognized by your system.";
+      } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        userMsg = "Webcam permission denied. Please allow camera access in your browser address bar or OS System Settings.";
+      }
+      if (addLog) addLog("❌ Webcam Error: " + userMsg);
+      alert(userMsg);
     }
   };
 
@@ -281,6 +465,59 @@ export default function ARCamera({
         startCamera(newRes);
       }, 160);
     }
+  };
+
+  const handleCameraChange = async (newDeviceIdOrFacing) => {
+    const wasActive = cameraActive;
+    if (wasActive) {
+      stopCamera();
+    }
+
+    if (newDeviceIdOrFacing === 'user' || newDeviceIdOrFacing === 'environment') {
+      setSelectedDeviceId('');
+      selectedDeviceIdRef.current = '';
+      setFacingMode(newDeviceIdOrFacing);
+      facingModeRef.current = newDeviceIdOrFacing;
+      const shouldMirror = newDeviceIdOrFacing !== 'environment';
+      setIsMirrored(shouldMirror);
+      localStorage.setItem('arguitar_facing_mode', newDeviceIdOrFacing);
+      localStorage.removeItem('arguitar_camera_device_id');
+      if (wasActive) {
+        setTimeout(() => {
+          startCamera(captureResolutionRef.current, '', newDeviceIdOrFacing);
+        }, 160);
+      }
+    } else {
+      setSelectedDeviceId(newDeviceIdOrFacing);
+      selectedDeviceIdRef.current = newDeviceIdOrFacing;
+      localStorage.setItem('arguitar_camera_device_id', newDeviceIdOrFacing);
+
+      // Inspect selected camera label to determine front vs rear orientation
+      const camObj = availableCameras.find(c => c.deviceId === newDeviceIdOrFacing);
+      if (camObj && camObj.label) {
+        const lbl = camObj.label.toLowerCase();
+        if (lbl.includes('back') || lbl.includes('rear') || lbl.includes('environment')) {
+          setFacingMode('environment');
+          facingModeRef.current = 'environment';
+          setIsMirrored(false);
+        } else {
+          setFacingMode('user');
+          facingModeRef.current = 'user';
+          setIsMirrored(true);
+        }
+      }
+
+      if (wasActive) {
+        setTimeout(() => {
+          startCamera(captureResolutionRef.current, newDeviceIdOrFacing);
+        }, 160);
+      }
+    }
+  };
+
+  const handleFlipCamera = async () => {
+    const nextFacing = facingModeRef.current === 'user' ? 'environment' : 'user';
+    await handleCameraChange(nextFacing);
   };
 
   // Stop webcam feed
@@ -1682,13 +1919,13 @@ export default function ARCamera({
       >
         <video
           ref={videoRef}
-          className="camera-feed"
+          className={`camera-feed ${!isMirrored ? 'unmirrored' : ''}`}
           playsInline
           muted
         />
         <canvas
           ref={canvasRef}
-          className="overlay-canvas"
+          className={`overlay-canvas ${!isMirrored ? 'unmirrored' : ''}`}
         />
 
         {/* Welcoming Interactive Hero Overlay when Camera is Inactive */}
@@ -1738,7 +1975,7 @@ export default function ARCamera({
             </p>
 
             <button
-              onClick={startCamera}
+              onClick={() => startCamera()}
               className="btn-premium"
               style={{
                 fontSize: '15px',
@@ -1908,6 +2145,77 @@ export default function ARCamera({
                 </select>
               </div>
 
+              {/* Camera Device & Facing Mode Selector */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                color: 'var(--text-secondary)',
+                fontSize: '12px',
+                fontFamily: 'var(--font-mono)',
+                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+                paddingLeft: '10px'
+              }}>
+                <Camera size={13} style={{ color: 'var(--accent-purple)' }} />
+                <select
+                  value={selectedDeviceId || facingMode}
+                  onChange={(e) => handleCameraChange(e.target.value)}
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.08)',
+                    border: '1px solid rgba(255, 255, 255, 0.18)',
+                    borderRadius: '6px',
+                    color: 'var(--text-primary)',
+                    padding: '4px 6px',
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    cursor: 'pointer',
+                    outline: 'none',
+                    maxWidth: '160px'
+                  }}
+                  title="Select Camera Input"
+                >
+                  {(isMobileDevice() || availableCameras.length > 1) ? (
+                    <>
+                      <option value="user" style={{ background: '#0f172a', color: '#fff' }}>Front (Selfie)</option>
+                      <option value="environment" style={{ background: '#0f172a', color: '#fff' }}>Back Camera</option>
+                      {availableCameras.map((cam, idx) => (
+                        <option key={cam.deviceId || idx} value={cam.deviceId} style={{ background: '#0f172a', color: '#fff' }}>
+                          {cam.label || `Camera ${idx + 1}`}
+                        </option>
+                      ))}
+                    </>
+                  ) : (
+                    <option value="user" style={{ background: '#0f172a', color: '#fff' }}>
+                      {availableCameras[0]?.label || 'Default Webcam'}
+                    </option>
+                  )}
+                </select>
+
+                {/* Quick Flip Camera Button (shown on mobile or when multiple cameras are detected) */}
+                {(isMobileDevice() || availableCameras.length > 1) && (
+                  <button
+                    type="button"
+                    onClick={handleFlipCamera}
+                    style={{
+                      padding: '3px 6px',
+                      fontSize: '11px',
+                      borderRadius: '5px',
+                      border: '1px solid rgba(255, 255, 255, 0.15)',
+                      background: 'rgba(255, 255, 255, 0.06)',
+                      color: 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '3px'
+                    }}
+                    title={`Switch to ${facingMode === 'user' ? 'Back' : 'Front'} Camera`}
+                  >
+                    <SwitchCamera size={12} />
+                    <span>Flip</span>
+                  </button>
+                )}
+              </div>
+
               {/* Neck Width Calibrator */}
               <div style={{
                 display: 'flex',
@@ -2066,7 +2374,7 @@ export default function ARCamera({
               <button
                 className="btn-premium"
                 style={{ background: 'linear-gradient(135deg, var(--accent-cyan) 0%, rgba(6, 182, 212, 0.8) 100%)' }}
-                onClick={startCamera}
+                onClick={() => startCamera()}
               >
                 <Play size={15} fill="currentColor" /> Start Camera
               </button>
