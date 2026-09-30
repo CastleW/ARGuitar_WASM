@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings, Cpu } from 'lucide-react';
+import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings, Cpu, Music } from 'lucide-react';
 import { detectMarkers } from '../utils/aruco_detector';
 import {
   getNeckGeometry,
@@ -65,7 +65,8 @@ export default function ARCamera({
   addLog,
   cameraSize = '1000',
   onCameraSizeChange,
-  showSongStudio = false
+  showSongStudio = false,
+  onToggleSongStudio
 }) {
   const containerRef = useRef(null);
   const videoRef = useRef(null);
@@ -142,6 +143,16 @@ export default function ARCamera({
     showGhostFretsRef.current = showGhostFrets;
     localStorage.setItem('arguitar_ghost_frets', showGhostFrets ? 'true' : 'false');
   }, [showGhostFrets]);
+
+  // Live Marker Alignment & Ray Tracing Debugger toggle
+  const [showMarkerDebug, setShowMarkerDebug] = useState(() => {
+    return localStorage.getItem('arguitar_marker_debug') === 'true';
+  });
+  const showMarkerDebugRef = useRef(showMarkerDebug);
+  useEffect(() => {
+    showMarkerDebugRef.current = showMarkerDebug;
+    localStorage.setItem('arguitar_marker_debug', showMarkerDebug ? 'true' : 'false');
+  }, [showMarkerDebug]);
 
   // Sync fullscreen state with browser events (handles Esc key too)
   useEffect(() => {
@@ -1247,6 +1258,11 @@ export default function ARCamera({
       onStatusUpdate(statusText);
     }
 
+    // 6. Draw Marker & Alignment Diagnostic Overlay (if enabled in Options)
+    if (showMarkerDebugRef.current) {
+      drawMarkerDebug(ctx, markers, neckGeometry);
+    }
+
     loopRef.current = requestAnimationFrame(processFrame);
   };
 
@@ -1380,6 +1396,237 @@ export default function ARCamera({
       ctx.stroke();
       ctx.restore();
     }
+  };
+
+  /**
+   * Draw comprehensive real-time ArUco Alignment & Ray Tracing Diagnostics
+   */
+  const drawMarkerDebug = (ctx, markers, geometry) => {
+    ctx.save();
+
+    // 1. Draw each detected marker with corner boundaries and center tags
+    const markerEntries = Object.entries(markers || {});
+    markerEntries.forEach(([idStr, m]) => {
+      const id = parseInt(idStr, 10);
+      const isAnchor = geometry?.debug && (id === geometry.debug.firstId || id === geometry.debug.lastId);
+      const posCm = ARUCO_MARKER_MAP[id];
+
+      // Draw bounding box if corners exist
+      if (m.corners && m.corners.length >= 4) {
+        ctx.strokeStyle = isAnchor ? '#facc15' : '#38bdf8';
+        ctx.lineWidth = isAnchor ? 2.5 : 1.5;
+        ctx.beginPath();
+        ctx.moveTo(m.corners[0].x, m.corners[0].y);
+        for (let i = 1; i < 4; i++) {
+          ctx.lineTo(m.corners[i].x, m.corners[i].y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+
+        // Highlight corners
+        m.corners.forEach((c, cIdx) => {
+          ctx.fillStyle = cIdx === 0 ? '#ef4444' : '#38bdf8';
+          ctx.beginPath();
+          ctx.arc(c.x, c.y, 2.5, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+
+      // Draw center crosshair & coordinate tag
+      if (m.center) {
+        const cx = m.center.x;
+        const cy = m.center.y;
+        ctx.strokeStyle = isAnchor ? '#facc15' : '#4ade80';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(cx - 8, cy);
+        ctx.lineTo(cx + 8, cy);
+        ctx.moveTo(cx, cy - 8);
+        ctx.lineTo(cx, cy + 8);
+        ctx.stroke();
+
+        const tagText = `M${id} (${posCm !== undefined ? posCm + 'cm' : '?'})`;
+        const tagSub = `[${Math.round(cx)}, ${Math.round(cy)}]`;
+        drawUnmirroredText(ctx, tagText, cx, cy - 14, {
+          font: 'bold 11px monospace',
+          fillStyle: isAnchor ? '#fef08a' : '#86efac',
+          align: 'center',
+          baseline: 'bottom'
+        });
+        drawUnmirroredText(ctx, tagSub, cx, cy - 3, {
+          font: '9px monospace',
+          fillStyle: 'rgba(255, 255, 255, 0.75)',
+          align: 'center',
+          baseline: 'bottom'
+        });
+      }
+    });
+
+    // 2. Draw Baseline Ray and Extrapolated Endpoints if geometry available
+    if (geometry && geometry.debug) {
+      const { start, end, dx, dy, debug } = geometry;
+
+      // Draw active anchor baseline segment (dashed gold)
+      const firstMarker = markers[debug.firstId];
+      const lastMarker = markers[debug.lastId];
+      if (firstMarker?.center && lastMarker?.center) {
+        ctx.save();
+        ctx.setLineDash([6, 4]);
+        ctx.strokeStyle = '#facc15';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(firstMarker.center.x, firstMarker.center.y);
+        ctx.lineTo(lastMarker.center.x, lastMarker.center.y);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Extended full-axis ray from Nut (start) past Bridge (start + 1.4 * dx)
+      ctx.save();
+      ctx.setLineDash([3, 5]);
+      ctx.strokeStyle = 'rgba(234, 179, 8, 0.6)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(start.x + 1.4 * dx, start.y + 1.4 * dy);
+      ctx.stroke();
+      ctx.restore();
+
+      // Pulsing Nut Crosshair (S)
+      const isNutPinned = debug.isPinnedNut;
+      ctx.strokeStyle = isNutPinned ? '#06b6d4' : '#f97316';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(start.x, start.y, 11, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(start.x - 16, start.y);
+      ctx.lineTo(start.x + 16, start.y);
+      ctx.moveTo(start.x, start.y - 16);
+      ctx.lineTo(start.x, start.y + 16);
+      ctx.stroke();
+
+      const nutLabel = isNutPinned ? 'NUT (S) [M1]' : `NUT (S) [EXTRAP u=${debug.uNut.toFixed(2)}]`;
+      drawUnmirroredText(ctx, nutLabel, start.x, start.y - 16, {
+        font: 'bold 11px monospace',
+        fillStyle: isNutPinned ? '#67e8f9' : '#fdba74',
+        align: 'center',
+        baseline: 'bottom'
+      });
+
+      // Pulsing End Crosshair (E)
+      const isEndPinned = debug.isPinnedEnd;
+      ctx.strokeStyle = isEndPinned ? '#a855f7' : '#ec4899';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(end.x, end.y, 11, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(end.x - 16, end.y);
+      ctx.lineTo(end.x + 16, end.y);
+      ctx.moveTo(end.x, end.y - 16);
+      ctx.lineTo(end.x, end.y + 16);
+      ctx.stroke();
+
+      const endLabel = isEndPinned ? 'END (E) [M5]' : `END (E) [EXTRAP u=${debug.uEnd.toFixed(2)}]`;
+      drawUnmirroredText(ctx, endLabel, end.x, end.y + 18, {
+        font: 'bold 11px monospace',
+        fillStyle: isEndPinned ? '#d8b4fe' : '#f472b6',
+        align: 'center',
+        baseline: 'top'
+      });
+    }
+
+    // 3. Render Live Telemetry HUD Card
+    const hudX = 16;
+    const hudY = 65;
+    const hudW = 285;
+    const hudH = geometry?.debug ? 135 : 65;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+    ctx.strokeStyle = geometry?.debug?.spanCm < 20 ? '#ef4444' : 'rgba(56, 189, 248, 0.55)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(hudX, hudY, hudW, hudH, 8);
+    } else {
+      ctx.rect(hudX, hudY, hudW, hudH);
+    }
+    ctx.fill();
+    ctx.stroke();
+
+    // Card Header
+    drawUnmirroredText(ctx, '🛠️ ARUCO ALIGNMENT DEBUGGER', hudX + 12, hudY + 14, {
+      font: 'bold 11px monospace',
+      fillStyle: '#38bdf8',
+      align: 'left',
+      baseline: 'top'
+    });
+
+    const detectedIds = Object.keys(markers || {}).map(Number).sort((a, b) => a - b);
+    const hasM1 = detectedIds.includes(1);
+    drawUnmirroredText(ctx, `Detected Markers: [${detectedIds.join(', ')}]`, hudX + 12, hudY + 30, {
+      font: '10px monospace',
+      fillStyle: detectedIds.length >= 2 ? '#4ade80' : '#f87171',
+      align: 'left',
+      baseline: 'top'
+    });
+
+    if (geometry?.debug) {
+      const { debug } = geometry;
+      const isShort = debug.spanCm < 20;
+      const baselineText = `Baseline: M${debug.firstId} (${debug.firstCm}cm) -> M${debug.lastId} (${debug.lastCm}cm)`;
+      drawUnmirroredText(ctx, baselineText, hudX + 12, hudY + 46, {
+        font: '10px monospace',
+        fillStyle: '#facc15',
+        align: 'left',
+        baseline: 'top'
+      });
+
+      const spanText = isShort
+        ? `⚠️ Span: ${debug.spanCm.toFixed(1)}cm (SHORT - ${Math.round(50 / debug.spanCm)}x tilt magnif!)`
+        : `Span: ${debug.spanCm.toFixed(1)}cm (Stable baseline)`;
+      drawUnmirroredText(ctx, spanText, hudX + 12, hudY + 62, {
+        font: isShort ? 'bold 10px monospace' : '10px monospace',
+        fillStyle: isShort ? '#f87171' : '#86efac',
+        align: 'left',
+        baseline: 'top'
+      });
+
+      const nutStatus = hasM1 ? 'Nut: Pinned to M1' : `Nut: Extrap u=${debug.uNut.toFixed(2)} (k=${debug.kExtrap.toFixed(2)})`;
+      drawUnmirroredText(ctx, nutStatus, hudX + 12, hudY + 78, {
+        font: '10px monospace',
+        fillStyle: hasM1 ? '#a7f3d0' : '#fdba74',
+        align: 'left',
+        baseline: 'top'
+      });
+
+      const endStatus = debug.isPinnedEnd ? 'End: Pinned to M5' : `End: Extrap u=${debug.uEnd.toFixed(2)}`;
+      drawUnmirroredText(ctx, endStatus, hudX + 12, hudY + 94, {
+        font: '10px monospace',
+        fillStyle: debug.isPinnedEnd ? '#a7f3d0' : '#f472b6',
+        align: 'left',
+        baseline: 'top'
+      });
+
+      const deg = (Math.atan2(geometry.dy, geometry.dx) * 180 / Math.PI).toFixed(1);
+      drawUnmirroredText(ctx, `Axis Angle: ${deg}° | Len: ${Math.round(geometry.len)}px`, hudX + 12, hudY + 110, {
+        font: '10px monospace',
+        fillStyle: 'rgba(255, 255, 255, 0.75)',
+        align: 'left',
+        baseline: 'top'
+      });
+    } else {
+      drawUnmirroredText(ctx, '⚠️ Need >= 2 markers to track guitar axis!', hudX + 12, hudY + 46, {
+        font: 'bold 10px monospace',
+        fillStyle: '#ef4444',
+        align: 'left',
+        baseline: 'top'
+      });
+    }
+
+    ctx.restore();
   };
 
   // Cleanup on unmount
@@ -1601,9 +1848,8 @@ export default function ARCamera({
       </button>
 
 
-      {/* Streamlined Controls Overlay (Only visible once camera is active) */}
-      {cameraActive && (
-        <div style={{
+      {/* Streamlined Controls Overlay (Accessible in both windowed and fullscreen modes) */}
+      <div style={{
           position: 'absolute',
           bottom: '16px',
           left: '50%',
@@ -1764,6 +2010,32 @@ export default function ARCamera({
                   </button>
                 ))}
               </div>
+
+              {/* Debug Marker & Alignment Diagnostics Toggle */}
+              <button
+                type="button"
+                onClick={() => setShowMarkerDebug(prev => !prev)}
+                style={{
+                  padding: '3px 8px',
+                  fontSize: '11px',
+                  borderRadius: '6px',
+                  border: showMarkerDebug ? '1px solid #f59e0b' : '1px solid rgba(255, 255, 255, 0.14)',
+                  background: showMarkerDebug ? 'rgba(245, 158, 11, 0.25)' : 'rgba(255, 255, 255, 0.05)',
+                  color: showMarkerDebug ? '#fbbf24' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  fontWeight: showMarkerDebug ? 'bold' : 'normal',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  whiteSpace: 'nowrap',
+                  borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+                  marginLeft: '4px',
+                  transition: 'all 0.15s ease'
+                }}
+                title="Toggle live on-screen ArUco marker centers, baseline vector, and nut/bridge ray tracing"
+              >
+                🛠️ {showMarkerDebug ? 'Hide Debug' : 'Debug Rays'}
+              </button>
             </div>
           )}
 
@@ -1781,8 +2053,56 @@ export default function ARCamera({
             overflowX: 'auto',
             maxWidth: '100%'
           }}>
-            <button className="btn-premium" style={{ background: 'linear-gradient(135deg, var(--accent-red) 0%, rgba(239, 68, 68, 0.7) 100%)' }} onClick={stopCamera}>
-              <Square size={15} /> Stop Camera
+            {/* Start / Stop Camera Button */}
+            {cameraActive ? (
+              <button
+                className="btn-premium"
+                style={{ background: 'linear-gradient(135deg, var(--accent-red) 0%, rgba(239, 68, 68, 0.7) 100%)' }}
+                onClick={stopCamera}
+              >
+                <Square size={15} /> Stop Camera
+              </button>
+            ) : (
+              <button
+                className="btn-premium"
+                style={{ background: 'linear-gradient(135deg, var(--accent-cyan) 0%, rgba(6, 182, 212, 0.8) 100%)' }}
+                onClick={startCamera}
+              >
+                <Play size={15} fill="currentColor" /> Start Camera
+              </button>
+            )}
+
+            {/* Play-Along Songs Toggle Button */}
+            <button
+              type="button"
+              className={`btn-secondary ${showSongStudio ? 'active' : ''}`}
+              onClick={onToggleSongStudio}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 12px',
+                fontSize: '12px',
+                borderColor: showSongStudio ? 'var(--accent-purple)' : 'rgba(255, 255, 255, 0.15)',
+                background: showSongStudio ? 'rgba(168, 85, 247, 0.22)' : undefined,
+                color: showSongStudio ? '#d8b4fe' : 'var(--text-secondary)',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
+              title="Toggle interactive play-along song highway & track library"
+            >
+              <Music size={14} color={showSongStudio ? 'var(--accent-purple)' : 'var(--text-secondary)'} />
+              <span style={{ fontFamily: 'var(--font-mono)' }}>Songs</span>
+              <span style={{
+                fontSize: '9px',
+                padding: '1px 5px',
+                borderRadius: '999px',
+                background: showSongStudio ? 'rgba(168, 85, 247, 0.45)' : 'rgba(255, 255, 255, 0.1)',
+                color: showSongStudio ? '#fff' : 'var(--text-muted)',
+                fontWeight: 'bold'
+              }}>
+                {showSongStudio ? 'ON' : 'OFF'}
+              </span>
             </button>
 
             {/* Real-time Audio Toggle Button */}
@@ -1876,7 +2196,6 @@ export default function ARCamera({
             </button>
           </div>
         </div>
-      )}
 
       {/* Clean HUD Live & FPS Label + Hardware Diagnostics (Only when active) */}
       {cameraActive && (

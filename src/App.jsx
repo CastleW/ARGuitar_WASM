@@ -71,37 +71,6 @@ export default function App() {
           </span>
           <span className="status-pill active" style={{ fontSize: '10px' }}>AR LIVE</span>
         </div>
-
-        {/* Clean Controls / Toggle Toolbar in Header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <button
-            onClick={() => setShowSongStudio(prev => !prev)}
-            className={`btn-secondary ${showSongStudio ? 'active' : ''}`}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '6px 14px',
-              fontSize: '13px',
-              borderRadius: '8px',
-              borderColor: showSongStudio ? 'var(--accent-purple)' : 'rgba(255, 255, 255, 0.15)',
-              background: showSongStudio ? 'rgba(168, 85, 247, 0.18)' : 'rgba(255, 255, 255, 0.04)',
-              color: showSongStudio ? '#d8b4fe' : 'var(--text-secondary)'
-            }}
-            title="Toggle interactive play-along song highway & track library"
-          >
-            <span>🎵 Play-Along Songs</span>
-            <span style={{
-              fontSize: '10px',
-              padding: '2px 6px',
-              borderRadius: '999px',
-              background: showSongStudio ? 'rgba(168, 85, 247, 0.4)' : 'rgba(255, 255, 255, 0.1)',
-              color: showSongStudio ? '#fff' : 'var(--text-muted)'
-            }}>
-              {showSongStudio ? 'ON' : 'OFF'}
-            </span>
-          </button>
-        </div>
       </header>
 
       {/* Main workspace container */}
@@ -126,6 +95,7 @@ export default function App() {
             cameraSize={cameraSize}
             onCameraSizeChange={setCameraSize}
             showSongStudio={showSongStudio}
+            onToggleSongStudio={() => setShowSongStudio(prev => !prev)}
           />
 
           {/* Subtle Diagnostics & Logs Toggle Link */}

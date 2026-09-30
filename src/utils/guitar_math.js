@@ -416,7 +416,8 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
     depthRatio,
     totalFretLength: effectiveTotalLength,
     detectedMarkers: detected,
-    neckWidthScale
+    neckWidthScale,
+    debug: guitar.debug
   };
 }
 
@@ -593,7 +594,22 @@ export function calculateGuitarFromMarkers(markers, markerPoses = null) {
       start: m1.center,
       end: m5.center,
       poseStart: m1.pose,
-      poseEnd: m5.pose
+      poseEnd: m5.pose,
+      debug: {
+        detectedIds: detected.map(m => m.id),
+        firstId: 1,
+        lastId: 5,
+        firstCm: nutCm,
+        lastCm: endCm,
+        spanCm: endCm - nutCm,
+        k: 1.0,
+        kExtrap: 1.0,
+        uNut: 0,
+        uEnd: 1,
+        isPinnedNut: true,
+        isPinnedEnd: true,
+        allDetected: detected
+      }
     };
   }
 
@@ -651,7 +667,9 @@ export function calculateGuitarFromMarkers(markers, markerPoses = null) {
   }
 
   // Bounded depth ratio for safe extrapolation outside the marker span (prevents homography singularity)
-  const kExtrap = Math.max(0.85, Math.min(1.25, k));
+  // When baseline span is small (< 25cm), nonlinear perspective depth estimation is ill-conditioned.
+  // Clamp kExtrap to 1.0 (pure linear extrapolation) to prevent explosive stretching/shrinking.
+  const kExtrap = spanCm >= 25.0 ? Math.max(0.85, Math.min(1.25, k)) : 1.0;
 
   // Helper: Project physical fraction u (where first is u=0, last is u=1) to 2D image coordinates
   // Accounts for perspective compression:
@@ -678,16 +696,18 @@ export function calculateGuitarFromMarkers(markers, markerPoses = null) {
 
   let start = first.center;
   let end = last.center;
+  let uNut = 0;
+  let uEnd = 1;
 
   // Extrapolate Nut if Marker 1 is missing
   if (first.id !== 1) {
-    const uNut = (nutCm - first.cm) / spanCm; // negative or 0
+    uNut = (nutCm - first.cm) / spanCm; // negative or 0
     start = projectPoint(uNut);
   }
 
   // Extrapolate End (body) if Marker 5 is missing
   if (last.id !== 5) {
-    const uEnd = (endCm - first.cm) / spanCm; // > 1
+    uEnd = (endCm - first.cm) / spanCm; // > 1
     end = projectPoint(uEnd);
   }
 
@@ -695,7 +715,22 @@ export function calculateGuitarFromMarkers(markers, markerPoses = null) {
     start,
     end,
     poseStart: (m1 && m1.pose) || null,
-    poseEnd: (m5 && m5.pose) || null
+    poseEnd: (m5 && m5.pose) || null,
+    debug: {
+      detectedIds: detected.map(m => m.id),
+      firstId: first.id,
+      lastId: last.id,
+      firstCm: first.cm,
+      lastCm: last.cm,
+      spanCm,
+      k,
+      kExtrap,
+      uNut,
+      uEnd,
+      isPinnedNut: first.id === 1,
+      isPinnedEnd: last.id === 5,
+      allDetected: detected
+    }
   };
 }
 
