@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings } from 'lucide-react';
+import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings, Cpu } from 'lucide-react';
 import { detectMarkers } from '../utils/aruco_detector';
 import {
   getNeckGeometry,
@@ -82,6 +82,26 @@ export default function ARCamera({
   const lastStatusUpdateTimeRef = useRef(0);
   const lastFpsUpdateTimeRef = useRef(0);
   const [fps, setFps] = useState(60);
+
+  // Hardware acceleration diagnostics
+  const [mpDelegate, setMpDelegate] = useState('Detecting...');
+  const [mpError, setMpError] = useState(null);
+  const [gpuInfo] = useState(() => {
+    try {
+      const glCanvas = document.createElement('canvas');
+      const gl = glCanvas.getContext('webgl2') || glCanvas.getContext('webgl');
+      if (gl) {
+        const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+        const renderer = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+        return { supported: true, renderer: renderer || 'WebGL Active', isWebGL2: !!glCanvas.getContext('webgl2') };
+      }
+      return { supported: false, renderer: 'WebGL Unsupported' };
+    } catch {
+      return { supported: false, renderer: 'Unavailable' };
+    }
+  });
+  const [perfTimings, setPerfTimings] = useState({ aruco: '0', mp: '0', total: '0' });
+  const perfTimingsRef = useRef({ aruco: '0', mp: '0', total: '0' });
 
   // Audio state (persisted in localStorage)
   const [audioEnabled, setAudioEnabled] = useState(() => {
@@ -339,11 +359,15 @@ export default function ARCamera({
             minHandPresenceConfidence: 0.5,
             minTrackingConfidence: 0.5
           });
+          setMpDelegate("GPU");
+          setMpError(null);
           console.log("MediaPipe Init: HandLandmarker instance created with GPU acceleration!");
-          if (addLog) addLog("MediaPipe: Hardware GPU acceleration enabled");
+          if (addLog) addLog("MediaPipe: Hardware GPU acceleration active");
         } catch (gpuErr) {
           console.warn("MediaPipe GPU delegate failed, falling back to CPU:", gpuErr);
-          if (addLog) addLog("MediaPipe: GPU unavailable, falling back to CPU");
+          setMpDelegate("CPU");
+          setMpError(gpuErr?.message || "GPU initialization failed");
+          if (addLog) addLog("MediaPipe: GPU unavailable (" + (gpuErr?.message || "error") + "), falling back to CPU");
           landmarker = await HandLandmarker.createFromOptions(vision, {
             baseOptions: {
               modelAssetBuffer: modelBuffer,
@@ -380,6 +404,7 @@ export default function ARCamera({
 
 
   // Frame processing loop
+  /* eslint-disable react-hooks/purity */
   const processFrame = async (timestamp) => {
     if (!videoRef.current || !canvasRef.current || !processingCanvasRef.current) {
       loopRef.current = requestAnimationFrame(processFrame);
@@ -423,10 +448,13 @@ export default function ARCamera({
       }
     }
 
+    const tFrameStart = performance.now();
+
     const ctx = canvas.getContext('2d');
     const procCtx = procCanvas.getContext('2d', { willReadFrequently: true });
 
     // Draw current frame to hidden processing canvas at decoupled resolution
+    const tArucoStart = performance.now();
     procCtx.drawImage(video, 0, 0, procWidth, procHeight);
     const imgData = procCtx.getImageData(0, 0, procWidth, procHeight);
 
@@ -460,6 +488,8 @@ export default function ARCamera({
     } catch (e) {
       console.error("Error detecting markers:", e);
     }
+    srcMat.delete();
+    perfTimingsRef.current.aruco = (performance.now() - tArucoStart).toFixed(0);
 
     // Index markers by ID for fast lookup
     const markers = {};
@@ -492,9 +522,8 @@ export default function ARCamera({
       }
     });
 
-    srcMat.delete();
-
     // 2. Detect hands using MediaPipe directly from HTML5 video (zero-copy GPU path)
+    const tMpStart = performance.now();
     let handLandmarks = null;
     let handLandmarksResults = null;
     if (mediaPipeLoaded && landmarkerRef.current) {
@@ -507,6 +536,7 @@ export default function ARCamera({
         console.error("Error in hand tracking:", err);
       }
     }
+    perfTimingsRef.current.mp = (performance.now() - tMpStart).toFixed(0);
 
     // Update logged IDs if they changed to prevent console spam
     const currentIdsStr = detectedMarkers.map(m => m.id).sort().join(", ");
@@ -518,7 +548,6 @@ export default function ARCamera({
     }
 
     // Log diagnostics every 3 seconds if there are failures
-    // eslint-disable-next-line react-hooks/purity
     const now = performance.now();
     if (now - lastDiagTimeRef.current > 3000) {
       lastDiagTimeRef.current = now;
@@ -535,10 +564,12 @@ export default function ARCamera({
     lastTimeRef.current = timestamp;
     const currentFps = timeDelta > 0 ? Math.round(1 / timeDelta) : 0;
 
-    // Throttle HUD FPS update to ~2.5x/sec so numbers are readable and performant
+    // Throttle HUD FPS & latency update to ~2.5x/sec so numbers are readable and performant
     if (timestamp - lastFpsUpdateTimeRef.current >= 400) {
       lastFpsUpdateTimeRef.current = timestamp;
       setFps(currentFps);
+      perfTimingsRef.current.total = (performance.now() - tFrameStart).toFixed(0);
+      setPerfTimings({ ...perfTimingsRef.current });
     }
 
     // Clear display canvas
@@ -1838,7 +1869,7 @@ export default function ARCamera({
         </div>
       )}
 
-      {/* Clean HUD Live & FPS Label (Only when active) */}
+      {/* Clean HUD Live & FPS Label + Hardware Diagnostics (Only when active) */}
       {cameraActive && (
         <div style={{
           position: 'absolute',
@@ -1846,15 +1877,61 @@ export default function ARCamera({
           left: '16px',
           zIndex: 20,
           display: 'flex',
-          alignItems: 'center',
-          gap: '8px'
+          flexDirection: 'column',
+          alignItems: 'flex-start',
+          gap: '6px'
         }}>
-          <span className="status-pill active" style={{ fontSize: '11px' }}>
-            <Video size={12} /> Feed: LIVE
-          </span>
-          <span className="status-pill active" style={{ fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
-            {fps} FPS
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span className="status-pill active" style={{ fontSize: '11px' }}>
+              <Video size={12} /> Feed: LIVE
+            </span>
+            <span className="status-pill active" style={{ fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
+              {fps} FPS
+            </span>
+            <span
+              className="status-pill"
+              title={mpError ? `Fallback Reason: ${mpError}` : (gpuInfo.renderer ? `GPU Renderer: ${gpuInfo.renderer}` : '')}
+              style={{
+                fontSize: '11px',
+                fontFamily: 'var(--font-mono)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                background: mpDelegate === 'GPU' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                borderColor: mpDelegate === 'GPU' ? 'rgba(34, 197, 94, 0.4)' : 'rgba(239, 68, 68, 0.4)',
+                color: mpDelegate === 'GPU' ? '#86efac' : '#fca5a5'
+              }}
+            >
+              <Cpu size={12} /> MP: {mpDelegate}
+            </span>
+          </div>
+
+          {/* Real-time frame latency breakdown */}
+          <div style={{
+            fontSize: '10px',
+            fontFamily: 'var(--font-mono)',
+            background: 'rgba(15, 23, 42, 0.85)',
+            backdropFilter: 'blur(6px)',
+            padding: '3px 8px',
+            borderRadius: '6px',
+            color: '#94a3b8',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px'
+          }}>
+            <span>MP: <strong style={{ color: mpDelegate === 'GPU' ? '#86efac' : '#fca5a5' }}>{perfTimings.mp}ms</strong></span>
+            <span style={{ opacity: 0.4 }}>•</span>
+            <span>ArUco: <strong style={{ color: '#cbd5e1' }}>{perfTimings.aruco}ms</strong></span>
+            <span style={{ opacity: 0.4 }}>•</span>
+            <span>Total: <strong style={{ color: '#e2e8f0' }}>{perfTimings.total}ms</strong></span>
+            {mpError && (
+              <>
+                <span style={{ opacity: 0.4 }}>•</span>
+                <span style={{ color: '#f87171' }} title={mpError}>Fallback: {mpError.slice(0, 20)}</span>
+              </>
+            )}
+          </div>
         </div>
       )}
     </div>
