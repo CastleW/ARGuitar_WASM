@@ -650,13 +650,25 @@ export function calculateGuitarFromMarkers(markers, markerPoses = null) {
     }
   }
 
+  // Bounded depth ratio for safe extrapolation outside the marker span (prevents homography singularity)
+  const kExtrap = Math.max(0.85, Math.min(1.25, k));
+
   // Helper: Project physical fraction u (where first is u=0, last is u=1) to 2D image coordinates
-  // Accounts for perspective compression: projFraction = (u * k) / ((1 - u) + u * k)
+  // Accounts for perspective compression:
+  // - For 0 <= u <= 1: standard projective homography (u * k) / ((1 - u) + u * k)
+  // - For u < 0 (extrapolating to nut): linear projective derivative u * kExtrap (prevents singularity explosion!)
+  // - For u > 1 (extrapolating to bridge): linear projective derivative 1 + (u - 1) / kExtrap
   const projectPoint = (u) => {
-    const denom = (1 - u) + u * k;
-    let projFraction = u;
-    if (denom > 0.1) {
-      projFraction = (u * k) / denom;
+    let projFraction;
+    if (u >= 0 && u <= 1) {
+      const denom = (1 - u) + u * k;
+      projFraction = denom > 0.05 ? (u * k) / denom : u;
+    } else if (u < 0) {
+      // Extrapolating backward towards nut: clamp to realistic physical perspective expansion
+      projFraction = u * kExtrap;
+    } else {
+      // Extrapolating forward towards bridge
+      projFraction = 1.0 + (u - 1.0) / kExtrap;
     }
     return {
       x: first.center.x + dx * projFraction,
