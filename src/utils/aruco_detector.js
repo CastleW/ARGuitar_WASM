@@ -31,9 +31,9 @@ export function detectMarkers(cv, src) {
   let detectedIds = new Set();
   let candidates = [];
   
-  // High-performance window sizes: [21, 35] eliminates speckle noise from blockSize 11
-  // and covers standard distance + close-up angles with 50% fewer passes.
-  const windowSizes = [21, 35];
+  // Try adaptive threshold window sizes ordered by efficacy.
+  // [11, 25, 41] covers fine markers, mid-range distances, and wide angles.
+  const windowSizes = [11, 25, 41];
   
   for (let w = 0; w < windowSizes.length; w++) {
     const blockSize = windowSizes[w];
@@ -61,7 +61,7 @@ export function detectMarkers(cv, src) {
           // Check if it is a convex 4-corner polygon (quadrilateral)
           if (approx.rows === 4 && cv.isContourConvex(approx)) {
             let area = cv.contourArea(approx);
-            if (area > 80 && area < maxMarkerArea) { // Filter out sub-pixel noise and screen-sized borders
+            if (area > 120 && area < maxMarkerArea) { // Filter out sub-pixel noise and screen-sized borders
               // Extract 4 corners
               let c0 = { x: approx.data32S[0], y: approx.data32S[1] };
               let c1 = { x: approx.data32S[2], y: approx.data32S[3] };
@@ -268,10 +268,10 @@ export function detectMarkers(cv, src) {
       thresh.delete();
     }
 
-    // Early-Exit: If 2 or more guitar markers are detected, neck geometry can be resolved
+    // Early-Exit: If key guitar markers are already detected, neck geometry is fully resolved
     const keyMarkers = [0, 1, 2, 3];
     const keyCount = keyMarkers.filter(id => detectedIds.has(id)).length;
-    if (keyCount >= 2 || detectedMarkers.length >= 2) {
+    if (keyCount >= 3 || detectedMarkers.length >= 4) {
       break; // Skip subsequent window passes for huge speedup!
     }
   }
