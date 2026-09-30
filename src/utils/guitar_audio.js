@@ -29,12 +29,6 @@ export function midiToFrequency(midi) {
   return 440 * Math.pow(2, (midi - 69) / 12);
 }
 
-export function getStringFrequency(stringNum, fretNum = 0) {
-  const baseMidi = OPEN_STRING_MIDI[stringNum] || 64;
-  const noteMidi = baseMidi + Math.max(0, fretNum);
-  return midiToFrequency(noteMidi);
-}
-
 // Convert base64 data URI to ArrayBuffer for Web Audio decoding
 function dataURIToArrayBuffer(dataURI) {
   const base64 = dataURI.split(',')[1];
@@ -185,7 +179,7 @@ class GuitarAudioEngine {
           if (buffer) {
             this.sampleCache.set(noteName, buffer);
           }
-        } catch (e) {
+        } catch {
           // ignore
         }
       }

@@ -328,7 +328,7 @@ export default function SongHighway({
               position: 'relative'
             }}>
               <span style={{ fontSize: '9px', textTransform: 'uppercase', color: '#38bdf8', letterSpacing: '0.08em', fontWeight: '700' }}>
-                PLAY NOW
+                PLAY NOW · BAR {currentMeasure + 1}
               </span>
               <span style={{ fontSize: '24px', fontWeight: '900', color: '#ffffff', lineHeight: 1.1, fontFamily: 'var(--font-mono)' }}>
                 {targetChord ? targetChord.short : '—'}

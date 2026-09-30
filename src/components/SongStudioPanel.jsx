@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { songEngine, BUILT_IN_SONGS } from '../utils/song_engine';
-import { Play, Pause, RotateCcw, Volume2, Sliders, Music, Zap } from 'lucide-react';
+import { Play, Pause, RotateCcw, Volume2, VolumeX, Sliders, Music, Zap } from 'lucide-react';
 
 export default function SongStudioPanel() {
   const [song, setSong] = useState(songEngine.currentSong);
@@ -154,6 +154,24 @@ export default function SongStudioPanel() {
           title="Restart Progression"
         >
           <RotateCcw size={15} />
+        </button>
+
+        <button
+          onClick={() => songEngine.toggleMetronome()}
+          style={{
+            background: isMetronomeEnabled ? 'rgba(168, 85, 247, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+            border: `1px solid ${isMetronomeEnabled ? '#a855f7' : 'rgba(255, 255, 255, 0.2)'}`,
+            color: isMetronomeEnabled ? '#c084fc' : 'var(--text-secondary)',
+            borderRadius: '8px',
+            padding: '10px 14px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          title={isMetronomeEnabled ? 'Metronome Click: ON' : 'Metronome Click: OFF'}
+        >
+          {isMetronomeEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
         </button>
       </div>
 

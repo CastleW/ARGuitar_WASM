@@ -9,7 +9,6 @@
  */
 
 import { guitarAudio } from './guitar_audio';
-import { OPEN_CHORDS } from './chord_detector';
 
 // Recommended fingerings for open and barre chords
 // Finger numbers: 1 = Index, 2 = Middle, 3 = Ring, 4 = Pinky
@@ -584,8 +583,8 @@ export class SongEngine {
     ));
 
     const now = performance.now();
-    let rating = 'MISS';
-    let points = 0;
+    let rating;
+    let points;
 
     if (isMatch) {
       this.combo++;

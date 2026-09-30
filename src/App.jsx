@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import ARCamera from './components/ARCamera';
-import TestSuite from './components/TestSuite';
 import SongStudioPanel from './components/SongStudioPanel';
 import { Info } from 'lucide-react';
 
@@ -8,8 +7,7 @@ export default function App() {
   const [statusText, setStatusText] = useState('Camera offline. Press "Start Camera" to begin.');
   const [logs, setLogs] = useState([]);
   const [openCvLoaded, setOpenCvLoaded] = useState(!!window.cv);
-  const [activeTab, setActiveTab] = useState('camera'); // 'camera' or 'testsuite'
-  const [mediaPipeLoaded, setMediaPipeLoaded] = useState(false);
+  const [mediaPipeLoaded, setMediaPipeLoaded] = useState(() => !!(window.FilesetResolver && window.HandLandmarker));
   const [cameraSize, setCameraSize] = useState(() => {
     return localStorage.getItem('arguitar_camera_size') || '1000';
   });
@@ -27,7 +25,6 @@ export default function App() {
   // Listen for OpenCV.js and MediaPipe ready events
   useEffect(() => {
     if (window.cv) {
-      setOpenCvLoaded(true);
       setTimeout(() => {
         addLog("OpenCV.js is already loaded.");
       }, 0);
@@ -43,15 +40,14 @@ export default function App() {
 
   useEffect(() => {
     if (window.FilesetResolver && window.HandLandmarker) {
-      setMediaPipeLoaded(true);
-    } else {
-      const handleMpReady = () => {
-        setMediaPipeLoaded(true);
-        addLog("MediaPipe loaded globally!");
-      };
-      window.addEventListener('mediapipe-ready', handleMpReady);
-      return () => window.removeEventListener('mediapipe-ready', handleMpReady);
+      return;
     }
+    const handleMpReady = () => {
+      setMediaPipeLoaded(true);
+      addLog("MediaPipe loaded globally!");
+    };
+    window.addEventListener('mediapipe-ready', handleMpReady);
+    return () => window.removeEventListener('mediapipe-ready', handleMpReady);
   }, []);
 
   return (
@@ -71,25 +67,7 @@ export default function App() {
           <span style={{ fontSize: '24px', fontWeight: 'bold' }} className="title-gradient">
             AR Guitar - OpenCV Tracking
           </span>
-          <span className="status-pill active" style={{ fontSize: '10px' }}>AR TRACKING</span>
-        </div>
-
-        {/* Tab selection */}
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button
-            className={`btn-secondary ${activeTab === 'camera' ? 'active' : ''}`}
-            onClick={() => setActiveTab('camera')}
-            style={{ padding: '8px 16px', fontSize: '13px' }}
-          >
-            Live Camera
-          </button>
-          <button
-            className={`btn-secondary ${activeTab === 'testsuite' ? 'active' : ''}`}
-            onClick={() => setActiveTab('testsuite')}
-            style={{ padding: '8px 16px', fontSize: '13px' }}
-          >
-            Test Suite
-          </button>
+          <span className="status-pill active" style={{ fontSize: '10px' }}>AR LIVE</span>
         </div>
 
         {/* Device Status Pills */}
@@ -106,73 +84,53 @@ export default function App() {
       {/* Main workspace container */}
       <main className="app-container">
 
-        {/* Left Side: Video stream or Test Suite */}
+        {/* Left Side: Live AR Camera */}
         <div style={{
           display: 'flex',
           flexDirection: 'column',
           gap: '16px',
           width: '100%',
           minWidth: 0,
-          maxWidth: activeTab === 'camera' ? (cameraSize === 'full' ? '100%' : `${cameraSize}px`) : 'none',
-          margin: activeTab === 'camera' ? '0 auto' : '0',
+          maxWidth: cameraSize === 'full' ? '100%' : `${cameraSize}px`,
+          margin: '0 auto',
           transition: 'max-width 0.25s ease'
         }}>
-          {activeTab === 'camera' ? (
-            <>
-              <ARCamera
-                openCvLoaded={openCvLoaded}
-                onStatusUpdate={(text) => setStatusText(text)}
-                onMediaPipeLoaded={setMediaPipeLoaded}
-                addLog={addLog}
-                cameraSize={cameraSize}
-                onCameraSizeChange={setCameraSize}
-              />
+          <ARCamera
+            openCvLoaded={openCvLoaded}
+            onStatusUpdate={(text) => setStatusText(text)}
+            onMediaPipeLoaded={setMediaPipeLoaded}
+            addLog={addLog}
+            cameraSize={cameraSize}
+            onCameraSizeChange={setCameraSize}
+          />
 
-              {/* Diagnostic Metrics and Text */}
-              <div className="glass-panel" style={{
-                padding: '16px',
-                minWidth: 0,
-                fontSize: '14px',
-                fontFamily: 'monospace',
-                display: 'flex',
-                gap: '12px',
-                alignItems: 'center',
-                height: '54px',
-                boxSizing: 'border-box'
-              }}>
-                <Info size={16} style={{ flexShrink: 0, color: 'var(--accent-cyan)' }} />
-                <span style={{
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  width: '100%'
-                }}>{statusText}</span>
-              </div>
-            </>
-          ) : (
-            <TestSuite openCvLoaded={openCvLoaded} />
-          )}
+          {/* Diagnostic Metrics and Status Bar */}
+          <div className="glass-panel" style={{
+            padding: '16px',
+            minWidth: 0,
+            fontSize: '14px',
+            fontFamily: 'monospace',
+            display: 'flex',
+            gap: '12px',
+            alignItems: 'center',
+            height: '54px',
+            boxSizing: 'border-box'
+          }}>
+            <Info size={16} style={{ flexShrink: 0, color: 'var(--accent-cyan)' }} />
+            <span style={{
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              width: '100%'
+            }}>{statusText}</span>
+          </div>
         </div>
 
-        {/* Right Side: Control panel / Info card and logs */}
+        {/* Right Side: Song Play-Along Studio & System Logs */}
         <div className="sidebar">
 
-          {/* Play-Along Song Studio or Test Suite Info */}
-          {activeTab === 'camera' ? (
-            <SongStudioPanel />
-          ) : (
-            <div className="glass-panel info-card" style={{ padding: '20px' }}>
-              <h3 style={{ fontSize: '14px', textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '0.05em', marginTop: 0, marginBottom: '12px' }}>
-                Test Suite Verification
-              </h3>
-              <p style={{ fontSize: '13px', lineHeight: '1.5', color: 'var(--text-secondary)', margin: '0 0 12px 0' }}>
-                The Visual Test Suite runs the ArUco marker detector and MediaPipe Hand Landmarker on the original static test images.
-              </p>
-              <p style={{ fontSize: '13px', lineHeight: '1.5', color: 'var(--text-secondary)', margin: 0 }}>
-                Click <strong>Run Verification Tests</strong> to execute all 38 alignment and fret accuracy tests.
-              </p>
-            </div>
-          )}
+          {/* Interactive Play-Along Song Studio Panel */}
+          <SongStudioPanel />
 
           {/* Logs Console */}
           <div className="glass-panel info-card" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minHeight: '200px' }}>

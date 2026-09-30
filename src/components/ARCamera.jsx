@@ -2,16 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass } from 'lucide-react';
 import { detectMarkers } from '../utils/aruco_detector';
 import {
-  calculateGuitarFromMarkers,
   getNeckGeometry,
   calculateFretAndStringFromGeometry,
-  calculateFretAndStringFromGuitarMarkers,
   getFretPositionAndWidth,
   createCameraMats,
   solvePose,
   FRETS_FOR_DRAWING,
   FRET_ABSOLUTE_DISTANCES_FROM_NUT,
-  TOTAL_FRET_LENGTH_IN_CM,
   ARUCO_MARKER_MAP
 } from '../utils/guitar_math';
 import { detectChordFromFingers, createChordSmoother } from '../utils/chord_detector';
@@ -46,14 +43,14 @@ const drawUnmirroredText = (ctx, text, x, y, options = {}) => {
 };
 
 // Resolution presets for webcam capture
-export const RESOLUTION_PRESETS = {
+const RESOLUTION_PRESETS = {
   '720p':  { width: 1280, height: 720,  label: '720p HD' },
   '480p':  { width: 640,  height: 480,  label: '480p VGA' },
   '1080p': { width: 1920, height: 1080, label: '1080p FHD' }
 };
 
 // Configuration for all 5 fingers of the fretting hand
-export const FRET_FINGERS = [
+const FRET_FINGERS = [
   { id: 'thumb',  name: 'Thumb',  num: 'T', tipIdx: 4,  dipIdx: 3,  color: '#f59e0b', ringColor: 'rgba(245, 158, 11, 0.95)', path: [0, 1, 2, 3, 4] },
   { id: 'index',  name: 'Index',  num: '1', tipIdx: 8,  dipIdx: 7,  color: '#38bdf8', ringColor: 'rgba(56, 189, 248, 0.95)', path: [0, 5, 6, 7, 8] },
   { id: 'middle', name: 'Middle', num: '2', tipIdx: 12, dipIdx: 11, color: '#22c55e', ringColor: 'rgba(34, 197, 94, 0.95)', path: [0, 9, 10, 11, 12] },
@@ -407,12 +404,10 @@ export default function ARCamera({
 
     // 1. Detect ArUco markers using our custom JS implementation
     let detectedMarkers = [];
-    let candidates = [];
     let diagnostics = null;
     try {
       const result = detectMarkers(cv, srcMat);
-      detectedMarkers = result.markers;
-      candidates = result.candidates;
+      detectedMarkers = result.markers || [];
       diagnostics = result.diagnostics;
     } catch (e) {
       console.error("Error detecting markers:", e);
@@ -917,8 +912,7 @@ export default function ARCamera({
           }
 
           // 2. Fret targets
-          const nowMs = performance.now();
-          const pulse = 0.5 + 0.5 * Math.sin(nowMs / 180);
+          const pulse = 0.5 + 0.5 * Math.sin(timestamp / 180);
           Object.entries(targetChord.frets).forEach(([strStr, target]) => {
             const str = parseInt(strStr, 10);
             const fret = target.fret;
@@ -1204,7 +1198,7 @@ export default function ARCamera({
 
   // HTML5 Canvas 2D Fretboard Draw (Unified Geometry)
   const drawGuitarOnCanvas = (ctx, geometry) => {
-    const { start, end, dx, dy, perpX, perpY, nutNeckWidth, endNeckWidth } = geometry;
+    const { start, dx, dy, perpX, perpY, nutNeckWidth, endNeckWidth } = geometry;
 
     // 1. Draw Frets across the full neck width (perspective-correct)
     FRETS_FOR_DRAWING.forEach(fretDist => {
