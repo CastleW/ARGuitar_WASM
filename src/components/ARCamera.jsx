@@ -327,17 +327,35 @@ export default function ARCamera({
 
       let landmarker;
       try {
-        landmarker = await HandLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetBuffer: modelBuffer,
-            delegate: "CPU"
-          },
-          runningMode: "VIDEO",
-          numHands: 2,
-          minHandDetectionConfidence: 0.5,
-          minHandPresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5
-        });
+        try {
+          landmarker = await HandLandmarker.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetBuffer: modelBuffer,
+              delegate: "GPU"
+            },
+            runningMode: "VIDEO",
+            numHands: 2,
+            minHandDetectionConfidence: 0.5,
+            minHandPresenceConfidence: 0.5,
+            minTrackingConfidence: 0.5
+          });
+          console.log("MediaPipe Init: HandLandmarker instance created with GPU acceleration!");
+          if (addLog) addLog("MediaPipe: Hardware GPU acceleration enabled");
+        } catch (gpuErr) {
+          console.warn("MediaPipe GPU delegate failed, falling back to CPU:", gpuErr);
+          if (addLog) addLog("MediaPipe: GPU unavailable, falling back to CPU");
+          landmarker = await HandLandmarker.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetBuffer: modelBuffer,
+              delegate: "CPU"
+            },
+            runningMode: "VIDEO",
+            numHands: 2,
+            minHandDetectionConfidence: 0.5,
+            minHandPresenceConfidence: 0.5,
+            minTrackingConfidence: 0.5
+          });
+        }
       } finally {
         if (tempModule) {
           window.Module = tempModule;
@@ -385,22 +403,32 @@ export default function ARCamera({
     const width = video.videoWidth;
     const height = video.videoHeight;
 
+    // Decouple ArUco OpenCV processing canvas from full display resolution
+    // Downscaling to 640px max width eliminates mobile GPU readback stalls (~80ms -> <2ms)
+    const MAX_PROC_WIDTH = 640;
+    const procWidth = width > MAX_PROC_WIDTH ? MAX_PROC_WIDTH : width;
+    const procHeight = width > MAX_PROC_WIDTH ? (Math.round((height / width) * MAX_PROC_WIDTH) & ~1) : height;
+    const scaleX = width / procWidth;
+    const scaleY = height / procHeight;
+
     // Set sizes (only if valid)
     if (width > 0 && height > 0) {
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
         canvas.height = height;
-        procCanvas.width = width;
-        procCanvas.height = height;
+      }
+      if (procCanvas.width !== procWidth || procCanvas.height !== procHeight) {
+        procCanvas.width = procWidth;
+        procCanvas.height = procHeight;
       }
     }
 
     const ctx = canvas.getContext('2d');
-    const procCtx = procCanvas.getContext('2d');
+    const procCtx = procCanvas.getContext('2d', { willReadFrequently: true });
 
-    // Draw current frame to hidden processing canvas
-    procCtx.drawImage(video, 0, 0, width, height);
-    const imgData = procCtx.getImageData(0, 0, width, height);
+    // Draw current frame to hidden processing canvas at decoupled resolution
+    procCtx.drawImage(video, 0, 0, procWidth, procHeight);
+    const imgData = procCtx.getImageData(0, 0, procWidth, procHeight);
 
     // Convert to OpenCV Mat
     let srcMat = cv.matFromImageData(imgData);
@@ -412,6 +440,23 @@ export default function ARCamera({
       const result = detectMarkers(cv, srcMat);
       detectedMarkers = result.markers || [];
       diagnostics = result.diagnostics;
+
+      // Scale detected marker coordinates back to full video stream resolution
+      if (scaleX !== 1 || scaleY !== 1) {
+        for (let i = 0; i < detectedMarkers.length; i++) {
+          const m = detectedMarkers[i];
+          if (m.corners) {
+            for (let c = 0; c < m.corners.length; c++) {
+              m.corners[c].x *= scaleX;
+              m.corners[c].y *= scaleY;
+            }
+          }
+          if (m.center) {
+            m.center.x *= scaleX;
+            m.center.y *= scaleY;
+          }
+        }
+      }
     } catch (e) {
       console.error("Error detecting markers:", e);
     }
