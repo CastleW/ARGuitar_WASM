@@ -31,8 +31,9 @@ export function detectMarkers(cv, src) {
   let detectedIds = new Set();
   let candidates = [];
   
-  // Try multiple adaptive threshold window sizes to handle different distances/lighting
-  const windowSizes = [7, 11, 21, 31, 51];
+  // Try adaptive threshold window sizes ordered by efficacy.
+  // [11, 25, 41] covers fine markers, mid-range distances, and wide angles.
+  const windowSizes = [11, 25, 41];
   
   for (let w = 0; w < windowSizes.length; w++) {
     const blockSize = windowSizes[w];
@@ -47,6 +48,8 @@ export function detectMarkers(cv, src) {
       hierarchy = new cv.Mat();
       cv.findContours(thresh, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
       
+      const maxMarkerArea = src.rows * src.cols * 0.35;
+      
       for (let i = 0; i < contours.size(); ++i) {
         let cnt = contours.get(i);
         let approx = new cv.Mat();
@@ -58,7 +61,7 @@ export function detectMarkers(cv, src) {
           // Check if it is a convex 4-corner polygon (quadrilateral)
           if (approx.rows === 4 && cv.isContourConvex(approx)) {
             let area = cv.contourArea(approx);
-            if (area > 100) { // Minimum marker area
+            if (area > 120 && area < maxMarkerArea) { // Filter out sub-pixel noise and screen-sized borders
               // Extract 4 corners
               let c0 = { x: approx.data32S[0], y: approx.data32S[1] };
               let c1 = { x: approx.data32S[2], y: approx.data32S[3] };
@@ -67,6 +70,17 @@ export function detectMarkers(cv, src) {
               
               let sorted = sortCorners([c0, c1, c2, c3]);
               candidates.push(sorted);
+              
+              // Skip redundant bit-extraction if center is within 14px of an already-decoded marker
+              const candCx = (sorted[0].x + sorted[2].x) / 2;
+              const candCy = (sorted[0].y + sorted[2].y) / 2;
+              const alreadyDecoded = detectedMarkers.some(m => {
+                const distSq = (m.center.x - candCx) ** 2 + (m.center.y - candCy) ** 2;
+                return distSq < 196; // 14px radius
+              });
+              if (alreadyDecoded) {
+                continue;
+              }
               
               let warped = null;
               let srcTri = null;
@@ -252,6 +266,13 @@ export function detectMarkers(cv, src) {
       if (contours) contours.delete();
       if (hierarchy) hierarchy.delete();
       thresh.delete();
+    }
+
+    // Early-Exit: If key guitar markers are already detected, neck geometry is fully resolved
+    const keyMarkers = [0, 1, 2, 3];
+    const keyCount = keyMarkers.filter(id => detectedIds.has(id)).length;
+    if (keyCount >= 3 || detectedMarkers.length >= 4) {
+      break; // Skip subsequent window passes for huge speedup!
     }
   }
   

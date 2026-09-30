@@ -1,15 +1,15 @@
 import { useState, useEffect } from 'react';
 import ARCamera from './components/ARCamera';
 import SongStudioPanel from './components/SongStudioPanel';
-import { Info } from 'lucide-react';
 
 export default function App() {
-  const [statusText, setStatusText] = useState('Camera offline. Press "Start Camera" to begin.');
   const [logs, setLogs] = useState([]);
+  const [showLogs, setShowLogs] = useState(false);
   const [openCvLoaded, setOpenCvLoaded] = useState(!!window.cv);
   const [mediaPipeLoaded, setMediaPipeLoaded] = useState(() => !!(window.FilesetResolver && window.HandLandmarker));
   const [cameraSize, setCameraSize] = useState(() => {
-    return localStorage.getItem('arguitar_camera_size') || '1000';
+    const saved = localStorage.getItem('arguitar_camera_size');
+    return ['800', '1000', '1200', 'full'].includes(saved) ? saved : '1000';
   });
 
   useEffect(() => {
@@ -50,11 +50,13 @@ export default function App() {
     return () => window.removeEventListener('mediapipe-ready', handleMpReady);
   }, []);
 
+  const [showSongStudio, setShowSongStudio] = useState(false);
+
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* Header bar */}
       <header style={{
-        padding: '16px 24px',
+        padding: '14px 24px',
         borderBottom: '1px solid var(--border-color)',
         display: 'flex',
         justifyContent: 'space-between',
@@ -64,30 +66,52 @@ export default function App() {
         zIndex: 100
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ fontSize: '24px', fontWeight: 'bold' }} className="title-gradient">
-            AR Guitar - OpenCV Tracking
+          <span style={{ fontSize: '22px', fontWeight: 'bold' }} className="title-gradient">
+            AR Guitar
           </span>
           <span className="status-pill active" style={{ fontSize: '10px' }}>AR LIVE</span>
         </div>
 
-        {/* Device Status Pills */}
-        <div style={{ display: 'flex', gap: '12px' }}>
-          <span className={`status-pill ${openCvLoaded ? 'active' : 'inactive'}`}>
-            OpenCV.js: {openCvLoaded ? 'READY' : 'LOADING'}
-          </span>
-          <span className={`status-pill ${mediaPipeLoaded ? 'active' : 'inactive'}`}>
-            MediaPipe: {mediaPipeLoaded ? 'READY' : 'LOADING'}
-          </span>
+        {/* Clean Controls / Toggle Toolbar in Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <button
+            onClick={() => setShowSongStudio(prev => !prev)}
+            className={`btn-secondary ${showSongStudio ? 'active' : ''}`}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '6px 14px',
+              fontSize: '13px',
+              borderRadius: '8px',
+              borderColor: showSongStudio ? 'var(--accent-purple)' : 'rgba(255, 255, 255, 0.15)',
+              background: showSongStudio ? 'rgba(168, 85, 247, 0.18)' : 'rgba(255, 255, 255, 0.04)',
+              color: showSongStudio ? '#d8b4fe' : 'var(--text-secondary)'
+            }}
+            title="Toggle interactive play-along song highway & track library"
+          >
+            <span>🎵 Play-Along Songs</span>
+            <span style={{
+              fontSize: '10px',
+              padding: '2px 6px',
+              borderRadius: '999px',
+              background: showSongStudio ? 'rgba(168, 85, 247, 0.4)' : 'rgba(255, 255, 255, 0.1)',
+              color: showSongStudio ? '#fff' : 'var(--text-muted)'
+            }}>
+              {showSongStudio ? 'ON' : 'OFF'}
+            </span>
+          </button>
         </div>
       </header>
 
       {/* Main workspace container */}
-      <main className="app-container">
+      <main className={`app-container ${showSongStudio ? 'with-sidebar' : ''}`}>
 
-        {/* Left Side: Live AR Camera */}
+        {/* Center / Left Side: Live AR Camera & Workspace */}
         <div style={{
           display: 'flex',
           flexDirection: 'column',
+          alignItems: 'stretch',
           gap: '16px',
           width: '100%',
           minWidth: 0,
@@ -97,75 +121,103 @@ export default function App() {
         }}>
           <ARCamera
             openCvLoaded={openCvLoaded}
-            onStatusUpdate={(text) => setStatusText(text)}
             onMediaPipeLoaded={setMediaPipeLoaded}
             addLog={addLog}
             cameraSize={cameraSize}
             onCameraSizeChange={setCameraSize}
+            showSongStudio={showSongStudio}
           />
 
-          {/* Diagnostic Metrics and Status Bar */}
-          <div className="glass-panel" style={{
-            padding: '16px',
-            minWidth: 0,
-            fontSize: '14px',
-            fontFamily: 'monospace',
-            display: 'flex',
-            gap: '12px',
-            alignItems: 'center',
-            height: '54px',
-            boxSizing: 'border-box'
-          }}>
-            <Info size={16} style={{ flexShrink: 0, color: 'var(--accent-cyan)' }} />
-            <span style={{
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              width: '100%'
-            }}>{statusText}</span>
+          {/* Subtle Diagnostics & Logs Toggle Link */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 4px' }}>
+            <button
+              onClick={() => setShowLogs(prev => !prev)}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-muted)',
+                fontSize: '11px',
+                fontFamily: 'var(--font-mono)',
+                cursor: 'pointer',
+                padding: '4px 8px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+              title="Toggle System Diagnostics & Event Logs"
+            >
+              {showLogs ? '▲ Hide Diagnostics' : '▼ System Logs & Diagnostics'}
+            </button>
           </div>
-        </div>
 
-        {/* Right Side: Song Play-Along Studio & System Logs */}
-        <div className="sidebar">
-
-          {/* Interactive Play-Along Song Studio Panel */}
-          <SongStudioPanel />
-
-          {/* Logs Console */}
-          <div className="glass-panel info-card" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minHeight: '200px' }}>
-            <h3 style={{ fontSize: '14px', textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '0.05em', marginBottom: '8px' }}>
-              System Logs
-            </h3>
-            <div style={{
-              height: '240px',
-              overflowY: 'auto',
-              overflowX: 'hidden',
-              wordBreak: 'break-word',
-              whiteSpace: 'pre-wrap',
-              background: 'rgba(0, 0, 0, 0.3)',
-              borderRadius: '8px',
-              padding: '10px',
-              fontFamily: 'var(--font-mono)',
-              fontSize: '11px',
-              color: '#d1d5db',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '4px'
-            }}>
-              {logs.length === 0 ? (
-                <div style={{ color: 'var(--text-muted)' }}>Waiting for system logs...</div>
-              ) : (
-                logs.map((log, idx) => (
-                  <div key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', paddingBottom: '2px' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>[{log.time}]</span> {log.msg}
-                  </div>
-                ))
-              )}
+          {/* Logs & Diagnostics Console (Collapsible) */}
+          {showLogs && (
+            <div className="glass-panel info-card" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <h3 style={{ fontSize: '12px', textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: '0.05em', margin: 0 }}>
+                    System Diagnostics
+                  </h3>
+                  {/* Relocated OpenCV & MediaPipe Ready Statuses */}
+                  <span className={`status-pill ${openCvLoaded ? 'active' : 'inactive'}`} style={{ fontSize: '11px' }}>
+                    OpenCV.js: {openCvLoaded ? 'READY' : 'LOADING'}
+                  </span>
+                  <span className={`status-pill ${mediaPipeLoaded ? 'active' : 'inactive'}`} style={{ fontSize: '11px' }}>
+                    MediaPipe: {mediaPipeLoaded ? 'READY' : 'LOADING'}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setLogs([])}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: '4px',
+                    color: 'var(--text-muted)',
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    cursor: 'pointer',
+                    padding: '2px 8px'
+                  }}
+                >
+                  Clear Logs
+                </button>
+              </div>
+              <div style={{
+                height: '160px',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                wordBreak: 'break-word',
+                whiteSpace: 'pre-wrap',
+                background: 'rgba(0, 0, 0, 0.4)',
+                borderRadius: '8px',
+                padding: '10px',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '11px',
+                color: '#d1d5db',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px'
+              }}>
+                {logs.length === 0 ? (
+                  <div style={{ color: 'var(--text-muted)' }}>Waiting for system logs...</div>
+                ) : (
+                  logs.map((log, idx) => (
+                    <div key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', paddingBottom: '2px' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>[{log.time}]</span> {log.msg}
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
-          </div>
-
+          )}
         </div>
+
+        {/* Right Side: Song Play-Along Studio (Conditional) */}
+        {showSongStudio && (
+          <aside className="sidebar">
+            <SongStudioPanel />
+          </aside>
+        )}
       </main>
     </div>
   );

@@ -47,17 +47,21 @@ export function createCameraMats(cv, width = 640, height = 480) {
   return { camMatrix, distCoef };
 }
 
+let cachedMarkerPoints = null;
+
 /**
  * Solve camera pose (3D position/rotation) of a marker using solvePnP
  * @returns {object|null} { rvec, tvec } in camera space
  */
 export function solvePose(cv, corners, camMatrix, distCoef) {
-  let markerPoints = cv.matFromArray(4, 3, cv.CV_32F, [
-    -4.0, 4.0, 0.0,
-    4.0, 4.0, 0.0,
-    4.0, -4.0, 0.0,
-    -4.0, -4.0, 0.0
-  ]);
+  if (!cachedMarkerPoints) {
+    cachedMarkerPoints = cv.matFromArray(4, 3, cv.CV_32F, [
+      -4.0, 4.0, 0.0,
+      4.0, 4.0, 0.0,
+      4.0, -4.0, 0.0,
+      -4.0, -4.0, 0.0
+    ]);
+  }
 
   let imagePoints = cv.matFromArray(4, 1, cv.CV_32FC2, [
     corners[0].x, corners[0].y,
@@ -71,9 +75,8 @@ export function solvePose(cv, corners, camMatrix, distCoef) {
 
   let method = cv.SOLVEPNP_IPPE_SQUARE !== undefined ? cv.SOLVEPNP_IPPE_SQUARE : (cv.SOLVEPNP_ITERATIVE || 0);
 
-  let success = cv.solvePnP(markerPoints, imagePoints, camMatrix, distCoef, rvec, tvec, false, method);
+  let success = cv.solvePnP(cachedMarkerPoints, imagePoints, camMatrix, distCoef, rvec, tvec, false, method);
 
-  markerPoints.delete();
   imagePoints.delete();
 
   if (success) {

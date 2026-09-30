@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass } from 'lucide-react';
+import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings } from 'lucide-react';
 import { detectMarkers } from '../utils/aruco_detector';
 import {
   getNeckGeometry,
@@ -64,17 +64,24 @@ export default function ARCamera({
   onMediaPipeLoaded,
   addLog,
   cameraSize = '1000',
-  onCameraSizeChange
+  onCameraSizeChange,
+  showSongStudio = false
 }) {
   const containerRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const processingCanvasRef = useRef(null);
-  const hudRef = useRef(null);
 
   const [cameraActive, setCameraActive] = useState(false);
   const [mediaPipeLoaded, setMediaPipeLoaded] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showAdvancedControls, setShowAdvancedControls] = useState(false);
+
+  // Performance cache refs
+  const cameraMatsRef = useRef({ width: 0, height: 0, camMatrix: null, distCoef: null });
+  const lastStatusUpdateTimeRef = useRef(0);
+  const lastFpsUpdateTimeRef = useRef(0);
+  const [fps, setFps] = useState(60);
 
   // Audio state (persisted in localStorage)
   const [audioEnabled, setAudioEnabled] = useState(() => {
@@ -258,10 +265,6 @@ export default function ARCamera({
         loopRef.current = null;
       }
 
-      // Clear HUD and Chord state
-      if (hudRef.current) {
-        hudRef.current.style.display = 'none';
-      }
       chordSmootherRef.current.reset();
       activeChordRef.current = null;
 
@@ -419,9 +422,17 @@ export default function ARCamera({
       markers[m.id] = m;
     });
 
-    // Solve poses (3D positions) of markers for perspective correction (scaled to resolution)
+    // Solve poses (3D positions) of markers for perspective correction (cached by resolution)
     const markerPoses = {};
-    const { camMatrix, distCoef } = createCameraMats(cv, width, height);
+    if (!cameraMatsRef.current.camMatrix || cameraMatsRef.current.width !== width || cameraMatsRef.current.height !== height) {
+      if (cameraMatsRef.current.camMatrix) {
+        cameraMatsRef.current.camMatrix.delete();
+        cameraMatsRef.current.distCoef.delete();
+      }
+      const { camMatrix, distCoef } = createCameraMats(cv, width, height);
+      cameraMatsRef.current = { width, height, camMatrix, distCoef };
+    }
+    const { camMatrix, distCoef } = cameraMatsRef.current;
 
     detectedMarkers.forEach(m => {
       if (ARUCO_MARKER_MAP[m.id] !== undefined) {
@@ -436,16 +447,14 @@ export default function ARCamera({
       }
     });
 
-    camMatrix.delete();
-    distCoef.delete();
     srcMat.delete();
 
-    // 2. Detect hands using MediaPipe
+    // 2. Detect hands using MediaPipe directly from HTML5 video (zero-copy GPU path)
     let handLandmarks = null;
     let handLandmarksResults = null;
     if (mediaPipeLoaded && landmarkerRef.current) {
       try {
-        handLandmarksResults = landmarkerRef.current.detectForVideo(procCanvas, timestamp);
+        handLandmarksResults = landmarkerRef.current.detectForVideo(video, timestamp);
         if (handLandmarksResults && handLandmarksResults.landmarks) {
           handLandmarks = handLandmarksResults.landmarks;
         }
@@ -480,6 +489,12 @@ export default function ARCamera({
     const timeDelta = (timestamp - lastTimeRef.current) / 1000;
     lastTimeRef.current = timestamp;
     const currentFps = timeDelta > 0 ? Math.round(1 / timeDelta) : 0;
+
+    // Throttle HUD FPS update to ~2.5x/sec so numbers are readable and performant
+    if (timestamp - lastFpsUpdateTimeRef.current >= 400) {
+      lastFpsUpdateTimeRef.current = timestamp;
+      setFps(currentFps);
+    }
 
     // Clear display canvas
     ctx.clearRect(0, 0, width, height);
@@ -691,7 +706,7 @@ export default function ARCamera({
       } else {
         // Hand is in strike plane (ready to strum)
         ctx.shadowColor = inStrikePlane ? '#f59e0b' : 'rgba(255,255,255,0.4)';
-        ctx.shadowBlur = inStrikePlane ? 16 : 6;
+        ctx.shadowBlur = inStrikePlane ? 10 : 4;
         ctx.fillStyle = inStrikePlane ? 'rgba(245, 158, 11, 0.95)' : 'rgba(255, 255, 255, 0.7)';
         ctx.beginPath();
         ctx.arc(pickX, pickY, inStrikePlane ? 8 : 5, 0, 2 * Math.PI);
@@ -1082,7 +1097,7 @@ export default function ARCamera({
       ctx.save();
       // Holographic card background & glowing border
       ctx.shadowColor = timeSinceStrum < 750 ? '#f59e0b' : chordThemeColor;
-      ctx.shadowBlur = timeSinceStrum < 750 ? 24 : 16;
+      ctx.shadowBlur = timeSinceStrum < 750 ? 14 : 8;
       ctx.fillStyle = 'rgba(8, 12, 22, 0.88)';
       ctx.strokeStyle = timeSinceStrum < 750 ? '#fbbf24' : chordThemeColor;
       ctx.lineWidth = timeSinceStrum < 750 ? 2.5 : 1.8;
@@ -1139,46 +1154,22 @@ export default function ARCamera({
       ctx.restore();
     }
 
-    // Update Fretboard overlay info text in the DOM HUD
     const activeFingers = trackedFingers.filter(f => f.isActive);
-    if (activeFingers.length > 0 || timeSinceStrum < 750 || activeChord) {
-      if (hudRef.current) {
-        let hudContent = '';
-        if (activeChord) {
-          hudContent += `🎸 ${activeChord.name.toUpperCase()}  ✦  `;
-        }
-        hudContent += activeFingers.map(f => `[${f.num}] F${f.fret}:S${f.string}`).join('  |  ');
-        if (timeSinceStrum < 750) {
-          hudContent += `${hudContent ? '   ✦   ' : ''}${activeStrumDisplayRef.current.text}`;
-        }
-        hudRef.current.textContent = hudContent;
-        hudRef.current.style.display = 'block';
 
-        if (activeChord) {
-          hudRef.current.style.borderColor = activeChord.quality === 'major' ? '#10b981' : '#a855f7';
-          hudRef.current.style.color = activeChord.quality === 'major' ? '#34d399' : '#c084fc';
-        } else {
-          hudRef.current.style.borderColor = 'var(--accent-cyan)';
-          hudRef.current.style.color = 'var(--accent-cyan)';
-        }
+    // Optional status update callback
+    if (onStatusUpdate && timestamp - lastStatusUpdateTimeRef.current >= 250) {
+      lastStatusUpdateTimeRef.current = timestamp;
+      const activeSummary = activeFingers.length > 0
+        ? activeFingers.map(f => `${f.name}: F${f.fret}·S${f.string}`).join(', ')
+        : 'None';
+
+      const chordDesc = activeChord ? `${activeChord.name} (${Math.round(activeChord.confidence * 100)}%)` : 'None';
+      let statusText = `FPS: ${currentFps} (${width}x${height}) | Chord: ${chordDesc} | Markers: ${detectedMarkers.length} | Fretting: ${activeSummary}`;
+      if (strumStatusDesc) {
+        statusText += ` | Strum: ${strumStatusDesc}`;
       }
-    } else {
-      if (hudRef.current) {
-        hudRef.current.style.display = 'none';
-      }
+      onStatusUpdate(statusText);
     }
-
-    // Update status label
-    const activeSummary = activeFingers.length > 0
-      ? activeFingers.map(f => `${f.name}: F${f.fret}·S${f.string}`).join(', ')
-      : 'None';
-
-    const chordDesc = activeChord ? `${activeChord.name} (${Math.round(activeChord.confidence * 100)}%)` : 'None';
-    let statusText = `FPS: ${currentFps} (${width}x${height}) | Chord: ${chordDesc} | Markers: ${detectedMarkers.length} | Fretting: ${activeSummary}`;
-    if (strumStatusDesc) {
-      statusText += ` | Strum: ${strumStatusDesc}`;
-    }
-    onStatusUpdate(statusText);
 
     loopRef.current = requestAnimationFrame(processFrame);
   };
@@ -1327,6 +1318,11 @@ export default function ARCamera({
         landmarkerRef.current.close();
         landmarkerRef.current = null;
       }
+      if (cameraMatsRef.current.camMatrix) {
+        cameraMatsRef.current.camMatrix.delete();
+        cameraMatsRef.current.distCoef.delete();
+        cameraMatsRef.current = { width: 0, height: 0, camMatrix: null, distCoef: null };
+      }
       if (onMediaPipeLoaded) onMediaPipeLoaded(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1337,6 +1333,8 @@ export default function ARCamera({
       ref={containerRef}
       className={`camera-container glass-panel ${captureResolution === '480p' ? 'res-4-3' : 'res-16-9'}`}
       style={{
+        width: '100%',
+        minHeight: isFullscreen ? 'none' : '480px',
         maxWidth: isFullscreen ? 'none' : (cameraSize === 'full' ? '100%' : `${cameraSize}px`),
         aspectRatio: isFullscreen ? 'auto' : (captureResolution === '480p' ? '4/3' : '16/9')
       }}
@@ -1344,6 +1342,9 @@ export default function ARCamera({
       <div
         className="camera-viewport"
         style={{
+          width: '100%',
+          height: '100%',
+          minHeight: isFullscreen ? 'none' : '480px',
           aspectRatio: captureResolution === '480p' ? '4/3' : '16/9'
         }}
       >
@@ -1358,11 +1359,127 @@ export default function ARCamera({
           className="overlay-canvas"
         />
 
-        {/* Interactive Play-Along Song Highway Overlay */}
-        <SongHighway
-          showGhostFrets={showGhostFrets}
-          onToggleGhostFrets={() => setShowGhostFrets(prev => !prev)}
-        />
+        {/* Welcoming Interactive Hero Overlay when Camera is Inactive */}
+        {!cameraActive && (
+          <div style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'radial-gradient(ellipse at center, rgba(30, 41, 59, 0.75) 0%, rgba(10, 15, 29, 0.96) 100%)',
+            backdropFilter: 'blur(10px)',
+            zIndex: 15,
+            padding: '24px',
+            textAlign: 'center',
+            color: '#fff',
+            minHeight: '480px',
+            boxSizing: 'border-box'
+          }}>
+            <div style={{
+              width: '60px',
+              height: '60px',
+              borderRadius: '18px',
+              background: 'linear-gradient(135deg, rgba(6, 182, 212, 0.25) 0%, rgba(168, 85, 247, 0.25) 100%)',
+              border: '1px solid rgba(56, 189, 248, 0.35)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: '16px',
+              boxShadow: '0 0 24px rgba(6, 182, 212, 0.25)'
+            }}>
+              <span style={{ fontSize: '28px' }}>🎸</span>
+            </div>
+
+            <h2 style={{ fontSize: '22px', fontWeight: 'bold', margin: '0 0 8px 0', letterSpacing: '-0.02em' }}>
+              Welcome to <span className="title-gradient">AR Guitar</span>
+            </h2>
+            <p style={{
+              fontSize: '13px',
+              color: 'var(--text-secondary)',
+              maxWidth: '440px',
+              margin: '0 0 20px 0',
+              lineHeight: 1.5
+            }}>
+              Play virtual guitar chords in real-time with computer vision. Hold your guitar fretboard up to the webcam and strum to play.
+            </p>
+
+            <button
+              onClick={startCamera}
+              className="btn-premium"
+              style={{
+                fontSize: '15px',
+                padding: '10px 24px',
+                gap: '8px',
+                boxShadow: '0 4px 20px rgba(6, 182, 212, 0.4)',
+                cursor: 'pointer'
+              }}
+            >
+              <Play size={16} fill="currentColor" /> Start Camera
+            </button>
+
+            {/* Quick 3-Step Guide */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+              gap: '12px',
+              maxWidth: '520px',
+              width: '100%',
+              marginTop: '28px'
+            }}>
+              <div style={{
+                background: 'rgba(255, 255, 255, 0.04)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius: '8px',
+                padding: '10px',
+                fontSize: '12px',
+                textAlign: 'left'
+              }}>
+                <div style={{ color: 'var(--accent-cyan)', fontWeight: 'bold', marginBottom: '4px' }}>1. Start Camera</div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '11px', lineHeight: 1.4 }}>
+                  Enable webcam access to begin video feed.
+                </div>
+              </div>
+
+              <div style={{
+                background: 'rgba(255, 255, 255, 0.04)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius: '8px',
+                padding: '10px',
+                fontSize: '12px',
+                textAlign: 'left'
+              }}>
+                <div style={{ color: 'var(--accent-purple)', fontWeight: 'bold', marginBottom: '4px' }}>2. Hold Guitar</div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '11px', lineHeight: 1.4 }}>
+                  Ensure neck markers (0, 5, 7, 12) are visible.
+                </div>
+              </div>
+
+              <div style={{
+                background: 'rgba(255, 255, 255, 0.04)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius: '8px',
+                padding: '10px',
+                fontSize: '12px',
+                textAlign: 'left'
+              }}>
+                <div style={{ color: 'var(--accent-green)', fontWeight: 'bold', marginBottom: '4px' }}>3. Strum Chords</div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '11px', lineHeight: 1.4 }}>
+                  Fret chords with left hand, strum with right hand.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Interactive Play-Along Song Highway Overlay (Only active when Song Studio is toggled on) */}
+        {cameraActive && showSongStudio && (
+          <SongHighway
+            showGhostFrets={showGhostFrets}
+            onToggleGhostFrets={() => setShowGhostFrets(prev => !prev)}
+          />
+        )}
       </div>
 
       {/* Hidden processing canvas */}
@@ -1398,279 +1515,303 @@ export default function ARCamera({
         {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
       </button>
 
-      {/* Active Fret/String HUD Overlay */}
-      <div
-        ref={hudRef}
-        style={{
+
+      {/* Streamlined Controls Overlay (Only visible once camera is active) */}
+      {cameraActive && (
+        <div style={{
+          position: 'absolute',
+          bottom: '16px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 20,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '8px',
+          maxWidth: 'calc(100% - 32px)'
+        }}>
+          {/* Secondary Tuning / Calibration Drawer (Toggled via Options button) */}
+          {showAdvancedControls && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              background: 'rgba(15, 23, 42, 0.95)',
+              backdropFilter: 'blur(12px)',
+              padding: '8px 16px',
+              borderRadius: '10px',
+              border: '1px solid rgba(255, 255, 255, 0.14)',
+              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)',
+              overflowX: 'auto',
+              maxWidth: '100%'
+            }}>
+              {/* Camera Resolution Selector */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                color: 'var(--text-secondary)',
+                fontSize: '12px',
+                fontFamily: 'var(--font-mono)'
+              }}>
+                <Video size={13} style={{ color: 'var(--accent-cyan)' }} />
+                <select
+                  value={captureResolution}
+                  onChange={(e) => handleResolutionChange(e.target.value)}
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.08)',
+                    border: '1px solid rgba(255, 255, 255, 0.18)',
+                    borderRadius: '6px',
+                    color: 'var(--text-primary)',
+                    padding: '4px 6px',
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    cursor: 'pointer',
+                    outline: 'none'
+                  }}
+                  title="Webcam Capture Resolution"
+                >
+                  <option value="720p" style={{ background: '#0f172a', color: '#fff' }}>720p HD</option>
+                  <option value="480p" style={{ background: '#0f172a', color: '#fff' }}>480p VGA</option>
+                  <option value="1080p" style={{ background: '#0f172a', color: '#fff' }}>1080p FHD</option>
+                </select>
+              </div>
+
+              {/* Neck Width Calibrator */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                color: 'var(--text-secondary)',
+                fontSize: '12px',
+                fontFamily: 'var(--font-mono)',
+                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+                paddingLeft: '10px'
+              }}>
+                <Sliders size={13} style={{ color: 'var(--accent-cyan)' }} />
+                <span style={{ whiteSpace: 'nowrap' }}>Width:</span>
+                <input
+                  type="range"
+                  min="1.0"
+                  max="2.5"
+                  step="0.05"
+                  value={neckWidthScale}
+                  onChange={(e) => setNeckWidthScale(parseFloat(e.target.value))}
+                  style={{
+                    width: '56px',
+                    accentColor: 'var(--accent-cyan)',
+                    cursor: 'pointer'
+                  }}
+                  title="Adjust visual string spacing across the neck"
+                />
+                <span style={{ color: 'var(--accent-cyan)', minWidth: '30px', fontWeight: 'bold', fontSize: '11px' }}>
+                  {neckWidthScale.toFixed(2)}x
+                </span>
+              </div>
+
+              {/* Fret Scale Calibrator */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                color: 'var(--text-secondary)',
+                fontSize: '12px',
+                fontFamily: 'var(--font-mono)',
+                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+                paddingLeft: '10px'
+              }}>
+                <Sliders size={13} style={{ color: 'var(--accent-green)' }} />
+                <span style={{ whiteSpace: 'nowrap' }}>Scale:</span>
+                <input
+                  type="range"
+                  min="46.0"
+                  max="58.0"
+                  step="0.2"
+                  value={fretScaleLength}
+                  onChange={(e) => setFretScaleLength(parseFloat(e.target.value))}
+                  style={{
+                    width: '56px',
+                    accentColor: 'var(--accent-green)',
+                    cursor: 'pointer'
+                  }}
+                  title="Adjust 12th fret alignment along the neck"
+                />
+                <span style={{ color: 'var(--accent-green)', minWidth: '38px', fontWeight: 'bold', fontSize: '11px' }}>
+                  {fretScaleLength.toFixed(1)}cm
+                </span>
+              </div>
+
+              {/* Video Size Selector */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                color: 'var(--text-secondary)',
+                fontSize: '12px',
+                fontFamily: 'var(--font-mono)',
+                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+                paddingLeft: '10px'
+              }}>
+                <span style={{ whiteSpace: 'nowrap', marginRight: '2px' }}>Size:</span>
+                {[
+                  { label: '800', value: '800' },
+                  { label: '1000', value: '1000' },
+                  { label: '1200', value: '1200' },
+                  { label: 'Fit', value: 'full' }
+                ].map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => onCameraSizeChange && onCameraSizeChange(opt.value)}
+                    style={{
+                      padding: '2px 6px',
+                      fontSize: '11px',
+                      borderRadius: '5px',
+                      border: cameraSize === opt.value ? '1px solid var(--accent-cyan)' : '1px solid rgba(255, 255, 255, 0.12)',
+                      background: cameraSize === opt.value ? 'rgba(6, 182, 212, 0.25)' : 'rgba(255, 255, 255, 0.05)',
+                      color: cameraSize === opt.value ? '#38bdf8' : 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      fontWeight: cameraSize === opt.value ? 'bold' : 'normal',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Primary Essential Controls Bar */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            background: 'rgba(15, 23, 42, 0.9)',
+            backdropFilter: 'blur(10px)',
+            padding: '8px 14px',
+            borderRadius: '12px',
+            border: '1px solid rgba(255, 255, 255, 0.12)',
+            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
+            overflowX: 'auto',
+            maxWidth: '100%'
+          }}>
+            <button className="btn-premium" style={{ background: 'linear-gradient(135deg, var(--accent-red) 0%, rgba(239, 68, 68, 0.7) 100%)' }} onClick={stopCamera}>
+              <Square size={15} /> Stop Camera
+            </button>
+
+            {/* Real-time Audio Toggle Button */}
+            <button
+              type="button"
+              className={`btn-secondary ${audioEnabled ? 'active' : ''}`}
+              onClick={async () => {
+                const next = !audioEnabled;
+                setAudioEnabled(next);
+                guitarAudio.setMuted(!next);
+                if (next) await guitarAudio.ensureAudioContext();
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 12px',
+                fontSize: '12px'
+              }}
+              title={audioEnabled ? "Guitar Sound ON (Click to Mute)" : "Guitar Sound Muted (Click to Unmute)"}
+            >
+              {audioEnabled ? <Volume2 size={15} color="var(--accent-cyan)" /> : <VolumeX size={15} color="var(--text-secondary)" />}
+              <span style={{ fontFamily: 'var(--font-mono)' }}>{audioEnabled ? 'Sound ON' : 'Muted'}</span>
+            </button>
+
+            {/* Strum Mode Cycle Button */}
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                const modes = ['smart', 'down', 'both'];
+                const nextIdx = (modes.indexOf(strumMode) + 1) % modes.length;
+                setStrumMode(modes[nextIdx]);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 10px',
+                fontSize: '12px',
+                borderColor: strumMode === 'smart' ? '#06b6d4' : (strumMode === 'down' ? '#f59e0b' : '#a855f7')
+              }}
+              title="Click to cycle strum mode: Smart Depth -> Down Only -> Down & Up"
+            >
+              <Compass size={14} color={strumMode === 'smart' ? '#06b6d4' : (strumMode === 'down' ? '#f59e0b' : '#a855f7')} />
+              <span style={{ fontFamily: 'var(--font-mono)' }}>
+                {strumMode === 'smart' && '🎯 Smart Depth'}
+                {strumMode === 'down' && '⬇️ Down Only'}
+                {strumMode === 'both' && '⇅ Down & Up'}
+              </span>
+            </button>
+
+            {/* Advanced Tuning / Calibrate Toggle */}
+            <button
+              type="button"
+              className={`btn-secondary ${showAdvancedControls ? 'active' : ''}`}
+              onClick={() => setShowAdvancedControls(prev => !prev)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '6px 10px',
+                fontSize: '12px',
+                borderColor: showAdvancedControls ? 'var(--accent-cyan)' : 'rgba(255, 255, 255, 0.15)',
+                background: showAdvancedControls ? 'rgba(6, 182, 212, 0.15)' : undefined
+              }}
+              title="Toggle Calibration & Resolution Options"
+            >
+              <Settings size={14} style={{ color: showAdvancedControls ? 'var(--accent-cyan)' : 'var(--text-secondary)' }} />
+              <span style={{ fontFamily: 'var(--font-mono)' }}>Options</span>
+            </button>
+
+            {/* Fullscreen Button in Controls Bar */}
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              className="btn-secondary"
+              style={{
+                padding: '5px 8px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                fontSize: '12px',
+                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+                cursor: 'pointer'
+              }}
+              title={isFullscreen ? "Exit Fullscreen (Esc)" : "Enter Fullscreen"}
+            >
+              {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+              <span style={{ whiteSpace: 'nowrap' }}>{isFullscreen ? 'Exit' : 'Full'}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Clean HUD Live & FPS Label (Only when active) */}
+      {cameraActive && (
+        <div style={{
           position: 'absolute',
           top: '16px',
-          right: '60px',
+          left: '16px',
           zIndex: 20,
-          background: 'rgba(8, 9, 15, 0.85)',
-          backdropFilter: 'blur(4px)',
-          border: '1px solid var(--accent-cyan)',
-          borderRadius: '8px',
-          padding: '6px 12px',
-          fontFamily: 'var(--font-mono)',
-          fontSize: '14px',
-          fontWeight: 'bold',
-          color: 'var(--accent-cyan)',
-          boxShadow: '0 0 10px rgba(6, 182, 212, 0.3)',
-          display: 'none'
-        }}
-      />
-
-      {/* Controls Overlay */}
-      <div style={{
-        position: 'absolute',
-        bottom: '16px',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        zIndex: 20,
-        display: 'flex',
-        alignItems: 'center',
-        gap: '12px',
-        background: 'rgba(15, 23, 42, 0.9)',
-        backdropFilter: 'blur(10px)',
-        padding: '8px 16px',
-        borderRadius: '12px',
-        border: '1px solid rgba(255, 255, 255, 0.12)',
-        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
-        maxWidth: 'calc(100% - 32px)',
-        overflowX: 'auto'
-      }}>
-        {!cameraActive ? (
-          <button className="btn-premium" onClick={startCamera}>
-            <Play size={16} /> Start Camera
-          </button>
-        ) : (
-          <button className="btn-premium" style={{ background: 'linear-gradient(135deg, var(--accent-red) 0%, rgba(239, 68, 68, 0.7) 100%)' }} onClick={stopCamera}>
-            <Square size={16} /> Stop Camera
-          </button>
-        )}
-
-        {/* Real-time Audio Toggle Button */}
-        <button
-          type="button"
-          className={`btn-secondary ${audioEnabled ? 'active' : ''}`}
-          onClick={async () => {
-            const next = !audioEnabled;
-            setAudioEnabled(next);
-            guitarAudio.setMuted(!next);
-            if (next) await guitarAudio.ensureAudioContext();
-          }}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '7px 14px',
-            fontSize: '13px'
-          }}
-          title={audioEnabled ? "Guitar Sound ON (Click to Mute)" : "Guitar Sound Muted (Click to Unmute)"}
-        >
-          {audioEnabled ? <Volume2 size={16} color="var(--accent-cyan)" /> : <VolumeX size={16} color="var(--text-secondary)" />}
-          <span style={{ fontFamily: 'var(--font-mono)' }}>{audioEnabled ? 'Sound ON' : 'Muted'}</span>
-        </button>
-
-        {/* Strum Mode Cycle Button */}
-        <button
-          type="button"
-          className="btn-secondary"
-          onClick={() => {
-            const modes = ['smart', 'down', 'both'];
-            const nextIdx = (modes.indexOf(strumMode) + 1) % modes.length;
-            setStrumMode(modes[nextIdx]);
-          }}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '7px 12px',
-            fontSize: '13px',
-            borderColor: strumMode === 'smart' ? '#06b6d4' : (strumMode === 'down' ? '#f59e0b' : '#a855f7')
-          }}
-          title="Click to cycle strum mode: Smart Depth -> Down Only -> Down & Up"
-        >
-          <Compass size={15} color={strumMode === 'smart' ? '#06b6d4' : (strumMode === 'down' ? '#f59e0b' : '#a855f7')} />
-          <span style={{ fontFamily: 'var(--font-mono)' }}>
-            {strumMode === 'smart' && '🎯 Smart Depth'}
-            {strumMode === 'down' && '⬇️ Down Only'}
-            {strumMode === 'both' && '⇅ Down & Up'}
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}>
+          <span className="status-pill active" style={{ fontSize: '11px' }}>
+            <Video size={12} /> Feed: LIVE
           </span>
-        </button>
-
-        {/* Camera Resolution Selector */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-          color: 'var(--text-secondary)',
-          fontSize: '12px',
-          fontFamily: 'var(--font-mono)'
-        }}>
-          <Video size={14} style={{ color: 'var(--accent-cyan)' }} />
-          <select
-            value={captureResolution}
-            onChange={(e) => handleResolutionChange(e.target.value)}
-            style={{
-              background: 'rgba(255, 255, 255, 0.08)',
-              border: '1px solid rgba(255, 255, 255, 0.18)',
-              borderRadius: '6px',
-              color: 'var(--text-primary)',
-              padding: '6px 8px',
-              fontSize: '12px',
-              fontFamily: 'var(--font-mono)',
-              cursor: 'pointer',
-              outline: 'none'
-            }}
-            title="Webcam Capture Resolution"
-          >
-            <option value="720p" style={{ background: '#0f172a', color: '#fff' }}>720p HD (Best)</option>
-            <option value="480p" style={{ background: '#0f172a', color: '#fff' }}>480p VGA</option>
-            <option value="1080p" style={{ background: '#0f172a', color: '#fff' }}>1080p FHD</option>
-          </select>
-        </div>
-
-        {/* Neck Width Calibrator */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-          color: 'var(--text-secondary)',
-          fontSize: '12px',
-          fontFamily: 'var(--font-mono)'
-        }}>
-          <Sliders size={14} style={{ color: 'var(--accent-cyan)' }} />
-          <span style={{ whiteSpace: 'nowrap' }}>Width:</span>
-          <input
-            type="range"
-            min="1.0"
-            max="2.5"
-            step="0.05"
-            value={neckWidthScale}
-            onChange={(e) => setNeckWidthScale(parseFloat(e.target.value))}
-            style={{
-              width: '60px',
-              accentColor: 'var(--accent-cyan)',
-              cursor: 'pointer'
-            }}
-            title="Adjust visual string spacing across the neck"
-          />
-          <span style={{ color: 'var(--accent-cyan)', minWidth: '32px', fontWeight: 'bold' }}>
-            {neckWidthScale.toFixed(2)}x
+          <span className="status-pill active" style={{ fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
+            {fps} FPS
           </span>
         </div>
-
-        {/* Fret Scale Calibrator */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-          color: 'var(--text-secondary)',
-          fontSize: '12px',
-          fontFamily: 'var(--font-mono)',
-          borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-          paddingLeft: '10px'
-        }}>
-          <Sliders size={14} style={{ color: 'var(--accent-green)' }} />
-          <span style={{ whiteSpace: 'nowrap' }}>Scale:</span>
-          <input
-            type="range"
-            min="46.0"
-            max="58.0"
-            step="0.2"
-            value={fretScaleLength}
-            onChange={(e) => setFretScaleLength(parseFloat(e.target.value))}
-            style={{
-              width: '60px',
-              accentColor: 'var(--accent-green)',
-              cursor: 'pointer'
-            }}
-            title="Adjust 12th fret alignment along the neck"
-          />
-          <span style={{ color: 'var(--accent-green)', minWidth: '42px', fontWeight: 'bold' }}>
-            {fretScaleLength.toFixed(1)}cm
-          </span>
-        </div>
-
-        {/* Video Size Selector */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '4px',
-          color: 'var(--text-secondary)',
-          fontSize: '12px',
-          fontFamily: 'var(--font-mono)',
-          borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-          paddingLeft: '10px'
-        }}>
-          <span style={{ whiteSpace: 'nowrap', marginRight: '2px' }}>Size:</span>
-          {[
-            { label: '800', value: '800' },
-            { label: '1000', value: '1000' },
-            { label: '1200', value: '1200' },
-            { label: 'Fit', value: 'full' }
-          ].map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => onCameraSizeChange && onCameraSizeChange(opt.value)}
-              style={{
-                padding: '3px 7px',
-                fontSize: '11px',
-                borderRadius: '6px',
-                border: cameraSize === opt.value ? '1px solid var(--accent-cyan)' : '1px solid rgba(255, 255, 255, 0.12)',
-                background: cameraSize === opt.value ? 'rgba(6, 182, 212, 0.25)' : 'rgba(255, 255, 255, 0.05)',
-                color: cameraSize === opt.value ? '#38bdf8' : 'var(--text-secondary)',
-                cursor: 'pointer',
-                fontWeight: cameraSize === opt.value ? 'bold' : 'normal',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Fullscreen Button in Controls Bar */}
-        <button
-          type="button"
-          onClick={toggleFullscreen}
-          className="btn-secondary"
-          style={{
-            padding: '5px 10px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            fontSize: '12px',
-            borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-            cursor: 'pointer',
-            marginLeft: '2px'
-          }}
-          title={isFullscreen ? "Exit Fullscreen (Esc)" : "Enter Fullscreen"}
-        >
-          {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-          <span style={{ whiteSpace: 'nowrap' }}>{isFullscreen ? 'Exit' : 'Full'}</span>
-        </button>
-      </div>
-
-      {/* HUD Info Labels */}
-      <div style={{
-        position: 'absolute',
-        top: '16px',
-        left: '16px',
-        zIndex: 20,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '8px'
-      }}>
-        <span className={`status-pill ${cameraActive ? 'active' : 'inactive'}`}>
-          <Video size={12} /> Feed: {cameraActive ? 'LIVE' : 'OFFLINE'}
-        </span>
-        <span className={`status-pill ${openCvLoaded ? 'active' : 'inactive'}`}>
-          <Video size={12} /> OpenCV: {openCvLoaded ? 'READY' : 'LOADING'}
-        </span>
-      </div>
+      )}
     </div>
   );
 }
