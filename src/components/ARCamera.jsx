@@ -69,6 +69,14 @@ export default function ARCamera({
   // Hardware acceleration diagnostics
   const [mpDelegate, setMpDelegate] = useState('Detecting...');
   const [mpError, setMpError] = useState(null);
+  const [mpDelegatePreference, setMpDelegatePreference] = useState(() => {
+    return localStorage.getItem('arguitar_mp_delegate') || 'GPU';
+  });
+  const mpDelegatePreferenceRef = useRef(mpDelegatePreference);
+  useEffect(() => {
+    mpDelegatePreferenceRef.current = mpDelegatePreference;
+    localStorage.setItem('arguitar_mp_delegate', mpDelegatePreference);
+  }, [mpDelegatePreference]);
   const [gpuInfo] = useState(() => {
     try {
       const glCanvas = document.createElement('canvas');
@@ -646,8 +654,26 @@ export default function ARCamera({
     }
   };
 
+  const handleToggleMpDelegate = async () => {
+    const nextDelegate = mpDelegate === 'GPU' ? 'CPU' : 'GPU';
+    setMpDelegatePreference(nextDelegate);
+    mpDelegatePreferenceRef.current = nextDelegate;
+    localStorage.setItem('arguitar_mp_delegate', nextDelegate);
+
+    if (landmarkerRef.current) {
+      try {
+        landmarkerRef.current.close();
+      } catch (e) {
+        console.warn("Error closing landmarker:", e);
+      }
+      landmarkerRef.current = null;
+      setMediaPipeLoaded(false);
+      await initMediaPipe(nextDelegate);
+    }
+  };
+
   // Initialize MediaPipe Hand Landmarker standalone async function
-  const initMediaPipe = async () => {
+  const initMediaPipe = async (requestedDelegate = mpDelegatePreferenceRef.current) => {
     const { FilesetResolver, HandLandmarker } = window;
     if (!FilesetResolver || !HandLandmarker) {
       console.error("MediaPipe is not loaded globally on window yet.");
@@ -664,8 +690,8 @@ export default function ARCamera({
     }
     loadingRef.current = true;
     try {
-      console.log("Loading MediaPipe Landmarker in ARCamera...");
-      if (addLog) addLog("MediaPipe Init: Starting...");
+      console.log(`Loading MediaPipe Landmarker in ARCamera (preferred: ${requestedDelegate})...`);
+      if (addLog) addLog(`MediaPipe Init: Starting (${requestedDelegate})...`);
       await new Promise(resolve => setTimeout(resolve, 500));
 
       console.log("MediaPipe Init: Resolving local assets via FilesetResolver...");
@@ -698,27 +724,9 @@ export default function ARCamera({
 
       let landmarker;
       try {
-        try {
-          landmarker = await HandLandmarker.createFromOptions(vision, {
-            baseOptions: {
-              modelAssetBuffer: modelBuffer,
-              delegate: "GPU"
-            },
-            runningMode: "VIDEO",
-            numHands: 2,
-            minHandDetectionConfidence: 0.5,
-            minHandPresenceConfidence: 0.5,
-            minTrackingConfidence: 0.5
-          });
-          setMpDelegate("GPU");
-          setMpError(null);
-          console.log("MediaPipe Init: HandLandmarker instance created with GPU acceleration!");
-          if (addLog) addLog("MediaPipe: Hardware GPU acceleration active");
-        } catch (gpuErr) {
-          console.warn("MediaPipe GPU delegate failed, falling back to CPU:", gpuErr);
-          setMpDelegate("CPU");
-          setMpError(gpuErr?.message || "GPU initialization failed");
-          if (addLog) addLog("MediaPipe: GPU unavailable (" + (gpuErr?.message || "error") + "), falling back to CPU");
+        if (requestedDelegate === 'CPU') {
+          console.log("MediaPipe Init: Initializing CPU delegate (WASM XNNPACK SIMD)...");
+          if (addLog) addLog("MediaPipe: CPU mode (XNNPACK SIMD)");
           landmarker = await HandLandmarker.createFromOptions(vision, {
             baseOptions: {
               modelAssetBuffer: modelBuffer,
@@ -730,6 +738,42 @@ export default function ARCamera({
             minHandPresenceConfidence: 0.5,
             minTrackingConfidence: 0.5
           });
+          setMpDelegate("CPU");
+          setMpError(null);
+        } else {
+          try {
+            landmarker = await HandLandmarker.createFromOptions(vision, {
+              baseOptions: {
+                modelAssetBuffer: modelBuffer,
+                delegate: "GPU"
+              },
+              runningMode: "VIDEO",
+              numHands: 2,
+              minHandDetectionConfidence: 0.5,
+              minHandPresenceConfidence: 0.5,
+              minTrackingConfidence: 0.5
+            });
+            setMpDelegate("GPU");
+            setMpError(null);
+            console.log("MediaPipe Init: HandLandmarker instance created with GPU acceleration!");
+            if (addLog) addLog("MediaPipe: Hardware GPU acceleration active");
+          } catch (gpuErr) {
+            console.warn("MediaPipe GPU delegate failed, falling back to CPU:", gpuErr);
+            setMpDelegate("CPU");
+            setMpError(gpuErr?.message || "GPU initialization failed");
+            if (addLog) addLog("MediaPipe: GPU unavailable (" + (gpuErr?.message || "error") + "), falling back to CPU");
+            landmarker = await HandLandmarker.createFromOptions(vision, {
+              baseOptions: {
+                modelAssetBuffer: modelBuffer,
+                delegate: "CPU"
+              },
+              runningMode: "VIDEO",
+              numHands: 2,
+              minHandDetectionConfidence: 0.5,
+              minHandPresenceConfidence: 0.5,
+              minTrackingConfidence: 0.5
+            });
+          }
         }
       } finally {
         if (tempModule) {
@@ -812,10 +856,6 @@ export default function ARCamera({
     const ctx = canvas.getContext('2d');
     const procCtx = procCanvas.getContext('2d', { willReadFrequently: true });
 
-    // Always perform fast GPU draw of current video frame to processing canvas (~1ms).
-    // This downscaled canvas is then reused as lightweight feed for MediaPipe.
-    procCtx.drawImage(video, 0, 0, procWidth, procHeight);
-
     // Temporal frame staggering:
     // When guitar markers are already locked on, mobile devices only need to re-detect ArUco markers every 2nd frame (15-20 Hz).
     // Fingers & strumming still update at 100% full frame rate every single frame!
@@ -832,8 +872,10 @@ export default function ARCamera({
     let markers = cachedMarkersMapRef.current;
 
     if (shouldScanAruco) {
-      // Step A: Extract pixels for OpenCV WASM (only when scanning ArUco!)
+      // Step A: Draw to downscaled processing canvas & extract pixels for OpenCV WASM (only when scanning ArUco!)
+      // Moving drawImage inside here avoids wasting 25ms on odd frames!
       const tCopyStart = performance.now();
+      procCtx.drawImage(video, 0, 0, procWidth, procHeight);
       const imgData = procCtx.getImageData(0, 0, procWidth, procHeight);
       let srcMat = cv.matFromImageData(imgData);
       dCopy = performance.now() - tCopyStart;
@@ -865,7 +907,6 @@ export default function ARCamera({
         console.error("Error detecting markers:", e);
       }
       srcMat.delete();
-      dAruco = performance.now() - tArucoStart;
 
       cachedMarkersRef.current = detectedMarkers;
       cachedDiagnosticsRef.current = diagnostics;
@@ -906,17 +947,16 @@ export default function ARCamera({
       // Solve neck geometry
       neckGeometry = getNeckGeometry(markers, neckWidthScaleRef.current, markerPoses, fretScaleLengthRef.current);
       cachedNeckGeometryRef.current = neckGeometry;
+      dAruco = performance.now() - tArucoStart;
     }
 
-    // Step C: Detect hands using MediaPipe
-    // On mobile devices, feeding procCanvas (480px max) cuts GPU texture upload bandwidth by ~7x!
+    // Step C: Detect hands using MediaPipe directly from HTML5 video (zero-copy hardware buffer)
     const tMpStart = performance.now();
     let handLandmarks = null;
     let handLandmarksResults = null;
     if (mediaPipeLoaded && landmarkerRef.current) {
       try {
-        const mpInput = isMobile ? procCanvas : video;
-        handLandmarksResults = landmarkerRef.current.detectForVideo(mpInput, timestamp);
+        handLandmarksResults = landmarkerRef.current.detectForVideo(video, timestamp);
         if (handLandmarksResults && handLandmarksResults.landmarks) {
           handLandmarks = handLandmarksResults.landmarks;
         }
@@ -2421,7 +2461,27 @@ export default function ARCamera({
                 border: '1px solid rgba(255, 255, 255, 0.06)'
               }}>
                 <div>GPU: <span style={{ color: '#cbd5e1' }}>{gpuInfo.renderer ? gpuInfo.renderer.split('(')[0].slice(0, 18) : 'Standard'}</span></div>
-                <div>MP Backend: <span style={{ color: mpDelegate === 'GPU' ? '#86efac' : '#fca5a5' }}>{mpDelegate}</span></div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <span>Engine:</span>
+                  <button
+                    type="button"
+                    onClick={handleToggleMpDelegate}
+                    style={{
+                      background: mpDelegate === 'GPU' ? 'rgba(34, 197, 94, 0.25)' : 'rgba(245, 158, 11, 0.25)',
+                      border: mpDelegate === 'GPU' ? '1px solid rgba(34, 197, 94, 0.4)' : '1px solid rgba(245, 158, 11, 0.4)',
+                      borderRadius: '4px',
+                      color: mpDelegate === 'GPU' ? '#86efac' : '#fbbf24',
+                      padding: '1px 6px',
+                      fontSize: '9px',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      fontWeight: 'bold'
+                    }}
+                    title="Click to toggle MediaPipe backend between WebGL GPU and multi-core CPU SIMD"
+                  >
+                    {mpDelegate === 'GPU' ? '⚡ GPU (tap for CPU)' : '🧠 CPU SIMD (tap for GPU)'}
+                  </button>
+                </div>
                 <div>Resolution: <span style={{ color: '#cbd5e1' }}>{perfTimings.res || captureResolution} ({perfTimings.procRes || '640x360'})</span></div>
                 <div>Cores: <span style={{ color: '#cbd5e1' }}>{navigator.hardwareConcurrency || 'N/A'}</span></div>
               </div>
@@ -2674,6 +2734,41 @@ export default function ARCamera({
               >
                 🛠️ {showMarkerDebug ? 'Hide Debug' : 'Debug Rays'}
               </button>
+
+              {/* MediaPipe Delegate Switcher (GPU vs Multi-core CPU) */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                color: 'var(--text-secondary)',
+                fontSize: '12px',
+                fontFamily: 'var(--font-mono)',
+                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+                paddingLeft: '10px'
+              }}>
+                <Cpu size={13} style={{ color: mpDelegate === 'GPU' ? '#86efac' : '#f59e0b' }} />
+                <button
+                  type="button"
+                  onClick={handleToggleMpDelegate}
+                  style={{
+                    padding: '3px 8px',
+                    fontSize: '11px',
+                    borderRadius: '5px',
+                    border: '1px solid rgba(255, 255, 255, 0.18)',
+                    background: mpDelegate === 'GPU' ? 'rgba(34, 197, 94, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                    color: mpDelegate === 'GPU' ? '#86efac' : '#fbbf24',
+                    cursor: 'pointer',
+                    fontWeight: 'bold',
+                    fontFamily: 'var(--font-mono)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                  title="Switch MediaPipe backend between WebGL GPU and Multi-core CPU (XNNPACK SIMD)"
+                >
+                  {mpDelegate === 'GPU' ? '⚡ GPU' : '🧠 CPU (SIMD)'}
+                </button>
+              </div>
 
               {/* Performance Profiler Toggle */}
               <button
