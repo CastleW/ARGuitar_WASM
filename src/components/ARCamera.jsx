@@ -962,8 +962,8 @@ export default function ARCamera({
 
     // Highlight fretted positions on the guitar neck for every active fretting finger
     if (neckGeometry) {
-      // Draw AR Ghost Target Fingering for Active Play-Along Song (if enabled)
-      if (showGhostFretsRef.current) {
+      // Draw AR Ghost Target Fingering for Active Play-Along Song (only when enabled AND a song is actively playing)
+      if (showGhostFretsRef.current && songEngine.isPlaying) {
         const targetChord = songEngine.getTargetChord();
         if (targetChord && targetChord.frets) {
           const { start, dx, dy, len, perpX, perpY, nutNeckWidth } = neckGeometry;
