@@ -268,11 +268,10 @@ export function detectMarkers(cv, src) {
       thresh.delete();
     }
 
-    // Early-Exit: If key guitar markers are already detected, neck geometry is fully resolved
-    const keyMarkers = [0, 1, 2, 3];
-    const keyCount = keyMarkers.filter(id => detectedIds.has(id)).length;
-    if (keyCount >= 3 || detectedMarkers.length >= 4) {
-      break; // Skip subsequent window passes for huge speedup!
+    // Early-Exit: If >= 2 markers are already detected, the guitar neck axis is fully defined.
+    // Skipping subsequent window sizes saves up to 66% of OpenCV compute per frame!
+    if (detectedMarkers.length >= 2) {
+      break;
     }
   }
   
