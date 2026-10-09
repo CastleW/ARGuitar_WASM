@@ -2,15 +2,62 @@ import arucoDictionary from '../assets/aruco_dictionary.json';
 
 let lastLogTime = 0;
 
+// Detector tuning constants (exported so session recordings can capture the exact config used)
+export const DETECTOR_CONFIG = {
+  windowSizes: [11, 25, 41],
+  adaptiveC: 7,
+  approxEpsilon: 0.03,
+  minArea: 120,
+  maxAreaFraction: 0.35,
+  warpSize: 70,
+  validIds: [0, 1, 2, 3, 4, 5],
+  maxCandidateDetails: 80,
+  maxHammingDistance: 1 // 1-bit error tolerance (guaranteed unique for IDs 0-5)
+};
+
+const NO_SCORE = 99;
+
+function popcount8(v) {
+  v = v - ((v >> 1) & 0x55);
+  v = (v & 0x33) + ((v >> 2) & 0x33);
+  return (v + (v >> 4)) & 0x0f;
+}
+
+/**
+ * Find the closest valid guitar marker (IDs 0-5, all rotations) by Hamming distance.
+ * Used for diagnostics only: tells us how many bits away a rejected candidate was.
+ */
+function bestHamming(bytes) {
+  let best = NO_SCORE;
+  let bestId = -1;
+  for (let id = 0; id <= 5; ++id) {
+    for (let rot = 0; rot < 4; ++rot) {
+      const d = arucoDictionary[id][rot];
+      const h = popcount8(bytes[0] ^ d[0]) + popcount8(bytes[1] ^ d[1]) +
+                popcount8(bytes[2] ^ d[2]) + popcount8(bytes[3] ^ d[3]);
+      if (h < best) {
+        best = h;
+        bestId = id;
+      }
+    }
+  }
+  return { ham: best, id: bestId };
+}
+
 /**
  * Detect ArUco markers in an image using OpenCV.js
  * @param {object} cv - The OpenCV.js instance
  * @param {object} src - The cv.Mat image source (RGBA or RGB)
- * @returns {object} { markers, candidates, diagnostics: { borderRejected, dictRejected } }
+ * @param {object} [options]
+ * @param {boolean} [options.collectDetails=false] - Emit per-candidate diagnostics (used by the session recorder)
+ * @returns {object} { markers, candidates, candidateDetails, diagnostics: { borderRejected, dictRejected, quads } }
  */
-export function detectMarkers(cv, src) {
+export function detectMarkers(cv, src, options = {}) {
+  const collectDetails = !!options.collectDetails;
+  const candidateDetails = collectDetails ? [] : null;
   let borderRejected = 0;
   let dictRejected = 0;
+  let quadCount = 0;
   let shouldLog = false;
   const now = Date.now();
   if (now - lastLogTime > 3000) {
@@ -70,7 +117,25 @@ export function detectMarkers(cv, src) {
               
               let sorted = sortCorners([c0, c1, c2, c3]);
               candidates.push(sorted);
-              
+              quadCount++;
+
+              let detail = null;
+              if (collectDetails && candidateDetails.length < DETECTOR_CONFIG.maxCandidateDetails) {
+                detail = {
+                  c: sorted.map(p => [p.x, p.y]),
+                  area: Math.round(area),
+                  side: Math.round(Math.sqrt(area) * 10) / 10,
+                  win: blockSize,
+                  res: 'pending',
+                  bw: NO_SCORE,
+                  ham: NO_SCORE,
+                  hamId: -1,
+                  hamAll: NO_SCORE,
+                  hamAllId: -1
+                };
+                candidateDetails.push(detail);
+              }
+
               // Skip redundant bit-extraction if center is within 14px of an already-decoded marker
               const candCx = (sorted[0].x + sorted[2].x) / 2;
               const candCy = (sorted[0].y + sorted[2].y) / 2;
@@ -79,6 +144,7 @@ export function detectMarkers(cv, src) {
                 return distSq < 196; // 14px radius
               });
               if (alreadyDecoded) {
+                if (detail) detail.res = 'dup';
                 continue;
               }
               
@@ -159,63 +225,97 @@ export function detectMarkers(cv, src) {
                     }
                     
                     const maxBorderWhite = strategy.type === 'global' ? 2 : 4;
-                    
-                    if (borderWhiteCount <= maxBorderWhite) {
-                      // Extract inner 5x5 bits
-                      let bits = [];
-                      for (let r = 1; r <= 5; ++r) {
-                        for (let c = 1; c <= 5; ++c) {
-                          bits.push(grid[r][c]);
+                    const borderOk = borderWhiteCount <= maxBorderWhite;
+
+                    // Extract inner 5x5 bits
+                    let bits = [];
+                    for (let r = 1; r <= 5; ++r) {
+                      for (let c = 1; c <= 5; ++c) {
+                        bits.push(grid[r][c]);
+                      }
+                    }
+
+                    // Convert to bytes
+                    let bytes = [0, 0, 0, 0];
+                    for (let k = 0; k < 25; ++k) {
+                      let byteIdx = Math.floor(k / 8);
+                      let bitIdx = 7 - (k % 8);
+                      if (bits[k] === 1) {
+                        bytes[byteIdx] |= (1 << bitIdx);
+                      }
+                    }
+                    // Right-shift the last byte by 7 to align with OpenCV's dictionary packing behavior
+                    bytes[3] >>= 7;
+
+                    if (detail) {
+                      const score = bestHamming(bytes);
+                      if (borderWhiteCount < detail.bw) detail.bw = borderWhiteCount;
+                      if (score.ham < detail.hamAll) {
+                        detail.hamAll = score.ham;
+                        detail.hamAllId = score.id;
+                      }
+                      if (borderOk && score.ham < detail.ham) {
+                        detail.ham = score.ham;
+                        detail.hamId = score.id;
+                      }
+                    }
+
+                    // Allow slight glare on border if bits match exactly (bestHam === 0)
+                    const borderOkGlary = borderWhiteCount <= maxBorderWhite + 2;
+
+                    // Match bytes in dictionary (Restricted to IDs 0-5 for guitar tracking)
+                    // Uses minimum Hamming distance for robust decoding with 1-bit error correction
+                    let bestHam = 99;
+                    let secondHam = 99;
+                    let bestId = -1;
+                    let bestRot = -1;
+
+                    for (let id = 0; id <= 5; ++id) {
+                      for (let rot = 0; rot < 4; ++rot) {
+                        let dictBytes = arucoDictionary[id][rot];
+                        let h = popcount8(bytes[0] ^ dictBytes[0]) +
+                                popcount8(bytes[1] ^ dictBytes[1]) +
+                                popcount8(bytes[2] ^ dictBytes[2]) +
+                                popcount8(bytes[3] ^ dictBytes[3]);
+                        if (h < bestHam) {
+                          secondHam = bestHam;
+                          bestHam = h;
+                          bestId = id;
+                          bestRot = rot;
+                        } else if (h < secondHam) {
+                          secondHam = h;
                         }
                       }
-                      
-                      // Convert to bytes
-                      let bytes = [0, 0, 0, 0];
-                      for (let k = 0; k < 25; ++k) {
-                        let byteIdx = Math.floor(k / 8);
-                        let bitIdx = 7 - (k % 8);
-                        if (bits[k] === 1) {
-                          bytes[byteIdx] |= (1 << bitIdx);
-                        }
-                      }
-                      // Right-shift the last byte by 7 to align with OpenCV's dictionary packing behavior
-                      bytes[3] >>= 7;
-                      
-                      // Match bytes in dictionary (Restricted to IDs 0-5 for guitar tracking)
-                      for (let id = 0; id <= 5; ++id) {
-                        for (let rot = 0; rot < 4; ++rot) {
-                          let dictBytes = arucoDictionary[id][rot];
-                          if (bytes[0] === dictBytes[0] &&
-                              bytes[1] === dictBytes[1] &&
-                              bytes[2] === dictBytes[2] &&
-                              bytes[3] === dictBytes[3]) {
-                            matchedId = id;
-                            matchedRot = rot;
-                            break;
-                          }
-                        }
-                        if (matchedId !== -1) break;
-                      }
-                      
-                      if (matchedId !== -1) {
-                        actualCorners = [
-                          sorted[matchedRot],
-                          sorted[(matchedRot + 1) % 4],
-                          sorted[(matchedRot + 2) % 4],
-                          sorted[(matchedRot + 3) % 4]
-                        ];
-                        cx = (actualCorners[0].x + actualCorners[2].x) / 2;
-                        cy = (actualCorners[0].y + actualCorners[2].y) / 2;
-                        selectedMethod = strategy.name;
-                        break; // Decoded successfully, stop trying other strategies
-                      } else {
-                        if (shouldLog) {
-                          console.log(`[ArUco Debug] Strategy ${strategy.name}: Candidate failed dictionary match. Bits: ${bits.join("")} | Bytes: ${JSON.stringify(bytes)}`);
-                        }
-                      }
+                    }
+
+                    if (borderOk) {
+                      anyBorderOk = true;
+                    }
+
+                    // Decode condition:
+                    // 1) Clean border + exact match (0 error)
+                    // 2) Clean border + 1-bit error correction (min distance between distinct IDs is 3, so 1 bit is 100% unambiguous)
+                    // 3) Slightly glary border + exact match (0 error)
+                    const maxHam = options.maxHammingDistance !== undefined ? options.maxHammingDistance : DETECTOR_CONFIG.maxHammingDistance;
+                    const canDecode = (borderOk && (bestHam === 0 || (bestHam <= maxHam && secondHam >= 3))) ||
+                                      (borderOkGlary && bestHam === 0);
+
+                    if (canDecode) {
+                      matchedId = bestId;
+                      matchedRot = bestRot;
+                      actualCorners = [
+                        sorted[matchedRot],
+                        sorted[(matchedRot + 1) % 4],
+                        sorted[(matchedRot + 2) % 4],
+                        sorted[(matchedRot + 3) % 4]
+                      ];
+                      cx = (actualCorners[0].x + actualCorners[2].x) / 2;
+                      cy = (actualCorners[0].y + actualCorners[2].y) / 2;
+                      selectedMethod = strategy.name;
+                      break; // Decoded successfully, stop trying other strategies
                     } else {
-                      if (shouldLog) {
-                        console.log(`[ArUco Debug] Strategy ${strategy.name}: Candidate failed border check. borderWhiteCount: ${borderWhiteCount}/${maxBorderWhite}`);
+                      if (shouldLog && borderOk) {
+                        console.log(`[ArUco Debug] Strategy ${strategy.name}: Candidate failed dictionary match. Best ham: ${bestHam} (ID ${bestId}), 2nd: ${secondHam}`);
                       }
                     }
                   } finally {
@@ -225,22 +325,34 @@ export function detectMarkers(cv, src) {
                     }
                   }
                 }
-                
+
                 if (matchedId !== -1) {
+                  if (detail) {
+                    detail.res = 'ok';
+                    detail.id = matchedId;
+                    detail.strat = selectedMethod;
+                  }
                   if (!detectedIds.has(matchedId)) {
                     detectedIds.add(matchedId);
                     detectedMarkers.push({
                       id: matchedId,
                       corners: actualCorners,
-                      center: { x: cx, y: cy }
+                      center: { x: cx, y: cy },
+                      strategy: selectedMethod,
+                      blockSize
                     });
                     if (shouldLog) {
                       console.log(`[ArUco Debug] Success! Decoded ID ${matchedId} using strategy ${selectedMethod}`);
                     }
                   }
-                } else {
-                  // If all strategies failed, count as dictionary rejected
+                } else if (anyBorderOk) {
+                  // At least one strategy produced a clean border but the bits matched no guitar ID
                   dictRejected++;
+                  if (detail) detail.res = 'dict';
+                } else {
+                  // No strategy produced a clean black border (glare, blur, or not a marker at all)
+                  borderRejected++;
+                  if (detail) detail.res = 'border';
                 }
               } catch (innerErr) {
                 console.error("Error in bit extraction:", innerErr);
@@ -276,8 +388,24 @@ export function detectMarkers(cv, src) {
   }
   
   gray.delete();
-  
-  return { markers: detectedMarkers, candidates, diagnostics: { borderRejected, dictRejected } };
+
+  if (candidateDetails) {
+    // Normalise sentinel scores to null for compact JSON
+    for (let i = 0; i < candidateDetails.length; i++) {
+      const d = candidateDetails[i];
+      if (d.bw === NO_SCORE) d.bw = null;
+      if (d.ham === NO_SCORE) { d.ham = null; delete d.hamId; }
+      if (d.hamAll === NO_SCORE) { d.hamAll = null; delete d.hamAllId; }
+      if (d.res === 'dup') { delete d.bw; delete d.ham; delete d.hamAll; delete d.hamId; delete d.hamAllId; }
+    }
+  }
+
+  return {
+    markers: detectedMarkers,
+    candidates,
+    candidateDetails,
+    diagnostics: { borderRejected, dictRejected, quads: quadCount }
+  };
 }
 
 /**

@@ -14,10 +14,10 @@ export const FRET_ABSOLUTE_DISTANCES_FROM_NUT = [
 
 export const FRETS_FOR_DRAWING = [0.0, ...FRET_ABSOLUTE_DISTANCES_FROM_NUT];
 
-export const TOTAL_FRET_LENGTH_IN_CM = 49.6; // Calibrated for Marker 5 placed on body past the 22nd fret (~19" fretboard)
+export const TOTAL_FRET_LENGTH_IN_CM = 50.0; // Calibrated for Marker 5 placed on body past the 22nd fret (~19" fretboard)
 export const NECK_WIDTH = 4.6; // cm
 export const NUMBER_OF_STRINGS = 6;
-export const ARUCO_MARKER_ABSOLUTE_POSITIONS = [0.0, 12.7, 28.0, 34.5, 52.0];
+export const ARUCO_MARKER_ABSOLUTE_POSITIONS = [0.0, 16.8, 28.5, 37.0, 50.0];
 
 // Default camera matrix (derived from MultiMatrix.npz)
 export const DEFAULT_CAM_MATRIX = [
@@ -165,9 +165,9 @@ export const ARUCO_MARKER_MAP = {
 
 export const ARUCO_MARKER_MAP = {
   1: 0.0,
-  2: 15.0,
-  3: 26.2,
-  4: 35.2,
+  2: 16.8,
+  3: 28.5,
+  4: 37.0,
   5: 50.0 // Fretboard end
 };
 

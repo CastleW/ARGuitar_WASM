@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings, Cpu, Music, Camera, SwitchCamera, Activity, Copy, Check, X } from 'lucide-react';
-import { detectMarkers } from '../utils/aruco_detector';
+import { detectMarkers, DETECTOR_CONFIG } from '../utils/aruco_detector';
 import {
   getNeckGeometry,
   calculateFretAndStringFromGeometry,
@@ -9,11 +9,15 @@ import {
   solvePose,
   FRETS_FOR_DRAWING,
   FRET_ABSOLUTE_DISTANCES_FROM_NUT,
-  ARUCO_MARKER_MAP
+  ARUCO_MARKER_MAP,
+  DEFAULT_CAM_MATRIX,
+  DEFAULT_DIST_COEF
 } from '../utils/guitar_math';
 import { detectChordFromFingers, createChordSmoother } from '../utils/chord_detector';
 import { guitarAudio } from '../utils/guitar_audio';
 import SongHighway from './SongHighway';
+import RecorderPanel from './RecorderPanel';
+import { SessionRecorder, saveRecordingFiles, buildFrameRecord } from '../utils/session_recorder';
 import { songEngine } from '../utils/song_engine';
 
 // Resolution presets for webcam capture
@@ -101,6 +105,15 @@ export default function ARCamera({
   }, [showProfiler]);
 
   const [copiedReport, setCopiedReport] = useState(false);
+
+  // ArUco session recorder (raw camera video + per-frame detection metrics for offline analysis)
+  const [recorder] = useState(() => new SessionRecorder());
+  const [recSupported] = useState(() => SessionRecorder.isSupported());
+  const [showRecorder, setShowRecorder] = useState(false);
+  const [recState, setRecState] = useState('idle'); // 'idle' | 'recording' | 'saving' | 'done'
+  const [recLiveStats, setRecLiveStats] = useState(null);
+  const [recResult, setRecResult] = useState(null);
+  const [recError, setRecError] = useState(null);
 
   const [perfTimings, setPerfTimings] = useState({
     copy: '0',
@@ -423,6 +436,117 @@ export default function ARCamera({
   const cachedMarkerPosesRef = useRef({});
   const cachedNeckGeometryRef = useRef(null);
   const cachedDiagnosticsRef = useRef(null);
+  const smoothedNeckRef = useRef(null);
+  const coastFramesRef = useRef(0);
+
+  // ---- ArUco Session Recorder handlers ----
+  const handleStartRecording = ({ label, recordOverlay }) => {
+    setRecError(null);
+    const video = videoRef.current;
+    const stream = video?.srcObject;
+    if (!stream || !video.videoWidth) {
+      setRecError('Camera is not running yet.');
+      return;
+    }
+    const track = stream.getVideoTracks()[0];
+    let trackSettings = {};
+    try {
+      trackSettings = track?.getSettings ? track.getSettings() : {};
+    } catch {
+      // Some browsers throw on getSettings for virtual cameras
+    }
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    const meta = {
+      app: 'ARGuitar_WASM',
+      userAgent: navigator.userAgent,
+      devicePixelRatio: window.devicePixelRatio || 1,
+      video: { width, height },
+      track: { label: track?.label || '', settings: trackSettings },
+      settings: {
+        arucoResolution: arucoResolutionRef.current,
+        captureResolution: captureResolutionRef.current,
+        handCadence: handCadenceRef.current,
+        numHands: numHandsTrackingRef.current,
+        neckWidthScale: neckWidthScaleRef.current,
+        fretScaleLength: fretScaleLengthRef.current,
+        mirroredDisplay: isMirroredRef.current,
+        facingMode: facingModeRef.current,
+        mpDelegate
+      },
+      calibration: {
+        note: 'Default intrinsics are defined at 640x480 and scaled per-axis to the stream resolution (createCameraMats)',
+        baseCamMatrix640x480: DEFAULT_CAM_MATRIX,
+        distCoef: DEFAULT_DIST_COEF,
+        solvePoseMarkerSideCm: 8.0
+      },
+      markerMap: ARUCO_MARKER_MAP,
+      fretDistancesFromNutCm: FRET_ABSOLUTE_DISTANCES_FROM_NUT,
+      detector: DETECTOR_CONFIG,
+      coordinateNotes: 'markers[].c, neck points and fingers are full-resolution video pixels (un-mirrored). cands[].c are processing-canvas pixels: multiply by proc.sx / proc.sy for video pixels.'
+    };
+    try {
+      recorder.start({ stream, meta, label, recordOverlay, width, height });
+      setRecResult(null);
+      setRecLiveStats(recorder.liveStats());
+      setRecState('recording');
+      if (addLog) addLog(`⏺️ Recording started: ${recorder.name}`);
+    } catch (e) {
+      setRecError(e.message);
+    }
+  };
+
+  const handleStopRecording = async () => {
+    if (!recorder.isRecording) return;
+    setRecState('saving');
+    try {
+      const result = await recorder.stop();
+      if (!result) {
+        setRecState('idle');
+        return;
+      }
+      const save = await saveRecordingFiles(result.files);
+      setRecResult({ name: result.name, summary: result.summary, save });
+      setRecState('done');
+      setShowRecorder(true);
+      if (addLog) addLog(`💾 Recording saved (${save.mode === 'server' ? 'recordings/' : 'downloads'}): ${result.name}`);
+    } catch (e) {
+      setRecError(`Save failed: ${e.message}`);
+      setRecState('idle');
+    }
+  };
+
+  const handleMarkEvent = (note) => recorder.addEvent(note || 'mark');
+
+  const handleResetRecorder = () => {
+    // Release object URLs from the previous session's download links
+    recResult?.save?.items?.forEach(item => item.url && URL.revokeObjectURL(item.url));
+    setRecResult(null);
+    setRecError(null);
+    setRecState('idle');
+  };
+
+  // Keyboard shortcut: "M" marks an event while recording (ignored while typing in inputs)
+  useEffect(() => {
+    if (recState !== 'recording') return;
+    const onKeyDown = (e) => {
+      if (e.key !== 'm' && e.key !== 'M') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
+      const ev = recorder.addEvent('mark (M key)');
+      if (ev && addLog) addLog(`🚩 Event marked at ${(ev.t / 1000).toFixed(1)}s`);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [recState, recorder, addLog]);
+
+  // Stop any in-flight recording if the component unmounts
+  useEffect(() => {
+    return () => {
+      if (recorder.isRecording) recorder.stop();
+    };
+  }, [recorder]);
 
   // Helper to obtain media stream with progressive multi-tier fallback
   // Prevents 'Requested device not found' on Mac Mini / external USB webcams that lack facingMode metadata
@@ -627,6 +751,10 @@ export default function ARCamera({
 
   // Stop webcam feed
   const stopCamera = () => {
+    // Finalise and save any in-progress recording before the camera tracks are torn down
+    if (recorder.isRecording) {
+      handleStopRecording();
+    }
     if (videoRef.current && videoRef.current.srcObject) {
       const tracks = videoRef.current.srcObject.getTracks();
       tracks.forEach(track => track.stop());
@@ -645,6 +773,8 @@ export default function ARCamera({
       cachedMarkerPosesRef.current = {};
       cachedNeckGeometryRef.current = null;
       cachedDiagnosticsRef.current = null;
+      smoothedNeckRef.current = null;
+      coastFramesRef.current = 0;
       frameCountRef.current = 0;
 
       if (addLog) addLog("Camera stopped.");
@@ -871,6 +1001,12 @@ export default function ARCamera({
     let neckGeometry = cachedNeckGeometryRef.current;
     let markers = cachedMarkersMapRef.current;
 
+    // Session recorder bookkeeping for this frame
+    const isRecording = recorder.isRecording;
+    let recCandidates = null;
+    let recRawNeck = null;
+    let recNeckMode = 'cached';
+
     if (shouldScanAruco) {
       // Step A: Draw to downscaled processing canvas & extract pixels for OpenCV WASM (only when scanning ArUco!)
       // Moving drawImage inside here avoids wasting 25ms on odd frames!
@@ -883,9 +1019,11 @@ export default function ARCamera({
       // Step B: Detect ArUco markers using custom JS implementation
       const tArucoStart = performance.now();
       try {
-        const result = detectMarkers(cv, srcMat);
+        // Detailed per-candidate diagnostics are only collected while recording (small extra cost)
+        const result = detectMarkers(cv, srcMat, { collectDetails: isRecording });
         detectedMarkers = result.markers || [];
         diagnostics = result.diagnostics;
+        recCandidates = result.candidateDetails;
 
         // Scale detected marker coordinates back to full video stream resolution
         if (scaleX !== 1 || scaleY !== 1) {
@@ -944,9 +1082,112 @@ export default function ARCamera({
       });
       cachedMarkerPosesRef.current = markerPoses;
 
-      // Solve neck geometry
-      neckGeometry = getNeckGeometry(markers, neckWidthScaleRef.current, markerPoses, fretScaleLengthRef.current);
-      cachedNeckGeometryRef.current = neckGeometry;
+      // Solve raw neck geometry from detected markers
+      const rawNeck = getNeckGeometry(markers, neckWidthScaleRef.current, markerPoses, fretScaleLengthRef.current);
+      recRawNeck = rawNeck;
+
+      if (rawNeck) {
+        recNeckMode = 'raw';
+        coastFramesRef.current = 0;
+
+        if (!smoothedNeckRef.current) {
+          // Initial lock-on: start with raw geometry
+          smoothedNeckRef.current = { ...rawNeck };
+        } else {
+          // Adaptive 1-Euro style Exponential Moving Average (EMA) filter
+          // When guitar is held steady, maxMove is small (< 2.5px): use heavy smoothing (alpha 0.18) to kill jitter
+          // When guitar moves quickly, maxMove is large (> 16px): snap fast (alpha 0.85) for zero lag
+          const prev = smoothedNeckRef.current;
+          const currentFit = rawNeck.debug ? `${rawNeck.debug.firstId}-${rawNeck.debug.lastId}` : null;
+          const fitChanged = prev.fit && currentFit && prev.fit !== currentFit;
+
+          const dStart = Math.hypot(rawNeck.start.x - prev.start.x, rawNeck.start.y - prev.start.y);
+          const dEnd = Math.hypot(rawNeck.end.x - prev.end.x, rawNeck.end.y - prev.end.y);
+          const maxMove = Math.max(dStart, dEnd);
+
+          let alpha = 0.20;
+          if (maxMove > 16) {
+            alpha = fitChanged ? 0.35 : 0.85; // Damp sudden jumps when switching marker baseline
+          } else if (maxMove > 2.5) {
+            alpha = 0.20 + ((maxMove - 2.5) / 13.5) * (fitChanged ? 0.25 : 0.65);
+          }
+
+          const smoothStart = {
+            x: prev.start.x + (rawNeck.start.x - prev.start.x) * alpha,
+            y: prev.start.y + (rawNeck.start.y - prev.start.y) * alpha
+          };
+          const smoothEnd = {
+            x: prev.end.x + (rawNeck.end.x - prev.end.x) * alpha,
+            y: prev.end.y + (rawNeck.end.y - prev.end.y) * alpha
+          };
+
+          const sDx = smoothEnd.x - smoothStart.x;
+          const sDy = smoothEnd.y - smoothStart.y;
+          const sLen = Math.hypot(sDx, sDy);
+          const sPerpX = sLen > 0 ? -sDy / sLen : rawNeck.perpX;
+          const sPerpY = sLen > 0 ? sDx / sLen : rawNeck.perpY;
+
+          const smoothNutWidth = prev.nutNeckWidth + (rawNeck.nutNeckWidth - prev.nutNeckWidth) * alpha;
+          const smoothEndWidth = prev.endNeckWidth + (rawNeck.endNeckWidth - prev.endNeckWidth) * alpha;
+          const smoothDepthRatio = (prev.depthRatio || 1.0) + ((rawNeck.depthRatio || 1.0) - (prev.depthRatio || 1.0)) * alpha;
+
+          smoothedNeckRef.current = {
+            ...rawNeck,
+            start: smoothStart,
+            end: smoothEnd,
+            dx: sDx,
+            dy: sDy,
+            len: sLen,
+            perpX: sPerpX,
+            perpY: sPerpY,
+            nutNeckWidth: smoothNutWidth,
+            endNeckWidth: smoothEndWidth,
+            depthRatio: smoothDepthRatio,
+            fit: currentFit
+          };
+        }
+        neckGeometry = smoothedNeckRef.current;
+        cachedNeckGeometryRef.current = neckGeometry;
+      } else {
+        // Markers temporarily lost (hand sweep, motion blur, reflection)
+        // Temporal Coasting: Hold last known valid geometry for up to 14 frames (~450ms)
+        if (smoothedNeckRef.current && coastFramesRef.current < 14) {
+          coastFramesRef.current++;
+          const prev = smoothedNeckRef.current;
+
+          // If at least 1 marker is still visible, translate the neck geometry with that marker!
+          let shiftX = 0, shiftY = 0;
+          let hasAnchor = false;
+          if (detectedMarkers.length >= 1) {
+            const anchorM = detectedMarkers[0];
+            const oldM = cachedMarkersMapRef.current[anchorM.id];
+            if (oldM && oldM.center) {
+              shiftX = anchorM.center.x - oldM.center.x;
+              shiftY = anchorM.center.y - oldM.center.y;
+              if (Math.hypot(shiftX, shiftY) < 35) {
+                hasAnchor = true;
+              }
+            }
+          }
+
+          if (hasAnchor) {
+            smoothedNeckRef.current = {
+              ...prev,
+              start: { x: prev.start.x + shiftX, y: prev.start.y + shiftY },
+              end: { x: prev.end.x + shiftX, y: prev.end.y + shiftY }
+            };
+          }
+
+          recNeckMode = hasAnchor ? 'coast-anchor' : 'coast';
+          neckGeometry = smoothedNeckRef.current;
+          cachedNeckGeometryRef.current = neckGeometry;
+        } else {
+          recNeckMode = 'none';
+          neckGeometry = null;
+          smoothedNeckRef.current = null;
+          cachedNeckGeometryRef.current = null;
+        }
+      }
       dAruco = performance.now() - tArucoStart;
     }
 
@@ -1682,6 +1923,38 @@ export default function ARCamera({
     const dRender = tFrameEnd - tRenderStart;
     const dTotal = tFrameEnd - tFrameStart;
 
+    // Session recorder: log this frame's ArUco metrics (+ composite overlay video if enabled).
+    // Done after timing so recorder overhead doesn't skew the recorded pipeline latencies.
+    if (isRecording) {
+      try {
+        recorder.compositeOverlay(video, canvas);
+        recorder.logFrame(buildFrameRecord({
+          frameIndex,
+          video,
+          scanned: shouldScanAruco,
+          fps: currentFps,
+          timings: { copy: dCopy, aruco: dAruco, mp: dMp, math: dMath, render: dRender, total: dTotal },
+          procWidth,
+          procHeight,
+          scaleX,
+          scaleY,
+          diagnostics,
+          detectedMarkers,
+          markerPoses,
+          candidateDetails: recCandidates,
+          neckMode: recNeckMode,
+          coastFrames: coastFramesRef.current,
+          rawNeck: recRawNeck,
+          neckGeometry,
+          handCount: handLandmarks ? handLandmarks.length : 0,
+          trackedFingers,
+          activeChord
+        }));
+      } catch (e) {
+        console.warn('[Recorder] Failed to log frame:', e);
+      }
+    }
+
     // Collect sliding window samples (max 30 items)
     const samples = perfSamplesRef.current;
     const pushSample = (arr, val) => {
@@ -1718,6 +1991,9 @@ export default function ARCamera({
       };
       perfTimingsRef.current = updated;
       setPerfTimings(updated);
+      if (isRecording) {
+        setRecLiveStats(recorder.liveStats());
+      }
     }
 
     loopRef.current = requestAnimationFrame(processFrame);
@@ -2318,6 +2594,23 @@ export default function ARCamera({
           gap: '8px',
           maxWidth: 'calc(100% - 32px)'
         }}>
+          {/* ArUco Session Recorder Panel (raw video + per-frame detection metrics) */}
+          {showRecorder && (
+            <RecorderPanel
+              state={recState}
+              supported={recSupported}
+              cameraActive={cameraActive}
+              liveStats={recLiveStats}
+              result={recResult}
+              error={recError}
+              onStart={handleStartRecording}
+              onStop={handleStopRecording}
+              onMark={handleMarkEvent}
+              onReset={handleResetRecorder}
+              onClose={() => setShowRecorder(false)}
+            />
+          )}
+
           {/* Detailed Performance Profiler Dashboard (Toggled via Profiler button or HUD) */}
           {showProfiler && (
             <div style={{
@@ -2935,6 +3228,33 @@ export default function ARCamera({
               <span style={{ fontFamily: 'var(--font-mono)' }}>Options</span>
             </button>
 
+            {/* ArUco Session Recorder Toggle */}
+            <button
+              id="rec-toggle-btn"
+              type="button"
+              className={`btn-secondary ${showRecorder || recState === 'recording' ? 'active' : ''}`}
+              onClick={() => setShowRecorder(prev => !prev)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 10px',
+                fontSize: '12px',
+                borderColor: recState === 'recording'
+                  ? 'var(--accent-red)'
+                  : (showRecorder ? 'rgba(239, 68, 68, 0.6)' : 'rgba(255, 255, 255, 0.15)'),
+                background: recState === 'recording' ? 'rgba(239, 68, 68, 0.2)' : undefined
+              }}
+              title="Record camera video + ArUco detection metrics for offline analysis"
+            >
+              <span className={`rec-dot ${recState === 'recording' ? 'recording' : ''}`} />
+              <span style={{ fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
+                {recState === 'recording'
+                  ? `REC ${Math.floor((recLiveStats?.elapsedSec || 0) / 60)}:${String(Math.floor((recLiveStats?.elapsedSec || 0) % 60)).padStart(2, '0')}`
+                  : 'Record'}
+              </span>
+            </button>
+
             {/* Fullscreen Button in Controls Bar */}
             <button
               type="button"
@@ -2992,6 +3312,27 @@ export default function ARCamera({
             >
               <Cpu size={12} /> MP: {mpDelegate}
             </span>
+            {recState === 'recording' && (
+              <span
+                className="status-pill"
+                onClick={() => setShowRecorder(true)}
+                style={{
+                  fontSize: '11px',
+                  fontFamily: 'var(--font-mono)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  background: 'rgba(239, 68, 68, 0.18)',
+                  borderColor: 'rgba(239, 68, 68, 0.5)',
+                  color: '#fca5a5',
+                  cursor: 'pointer'
+                }}
+                title="Recording ArUco session — click to open the recorder"
+              >
+                <span className="rec-dot recording" /> REC
+                {recLiveStats ? ` · ${recLiveStats.pctTwoPlusMarkers}% ≥2 markers` : ''}
+              </span>
+            )}
           </div>
 
           {/* Real-time frame latency breakdown */}
