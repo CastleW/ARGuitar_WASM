@@ -177,6 +177,7 @@ export function detectMarkers(cv, src, options = {}) {
                 let actualCorners = null;
                 let cx = 0, cy = 0;
                 let selectedMethod = '';
+                let anyBorderOk = false;
                 
                 // Try multiple thresholding strategies to handle glare/uneven lighting
                 const strategies = [

@@ -953,8 +953,8 @@ export default function ARCamera({
 
     // Decouple ArUco OpenCV processing canvas from full display resolution.
     // On mobile, capping the longest dimension to 480px prevents mobile GPU-to-CPU readback stalls (~25ms -> ~5ms).
-    // On desktop, 640px is used for maximum precision.
-    const MAX_PROC_DIM = isMobile ? 480 : 640;
+    // On desktop, 960px is used for sharp marker bit sampling under natural light.
+    const MAX_PROC_DIM = isMobile ? 480 : 960;
     const maxDim = Math.max(width, height);
     let procWidth = width;
     let procHeight = height;

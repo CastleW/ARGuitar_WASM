@@ -164,7 +164,7 @@ export const ARUCO_MARKER_MAP = {
 */
 
 export const ARUCO_MARKER_MAP = {
-  1: 0.0,
+  1: -6.8, // Calibrated: Marker 1 on headstock (4.6cm nut-to-edge + 2.2cm to center)
   2: 16.8,
   3: 28.5,
   4: 37.0,
@@ -371,7 +371,7 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
         if (span >= 28.0) {
           const wFirst = 1 / pFirst.z;
           const wLast = 1 / pLast.z;
-          const nutCm = ARUCO_MARKER_MAP[1] !== undefined ? ARUCO_MARKER_MAP[1] : 0.0;
+          const nutCm = 0.0; // The nut is ALWAYS at 0.0 cm
           const endCm = ARUCO_MARKER_MAP[5] !== undefined ? ARUCO_MARKER_MAP[5] : (totalFretLength || TOTAL_FRET_LENGTH_IN_CM);
           const wNut = wFirst - ((wLast - wFirst) / span) * (pFirst.cm - nutCm);
           const wEnd = wLast + ((wLast - wFirst) / span) * (endCm - pLast.cm);
@@ -585,35 +585,8 @@ export function calculateGuitarFromMarkers(markers, markerPoses = null) {
 
   detected.sort((a, b) => a.cm - b.cm);
 
-  const nutCm = ARUCO_MARKER_MAP[1] !== undefined ? ARUCO_MARKER_MAP[1] : 0.0;
+  const nutCm = 0.0; // The nut is ALWAYS at 0.0 cm (origin of frets and strings)
   const endCm = ARUCO_MARKER_MAP[5] !== undefined ? ARUCO_MARKER_MAP[5] : TOTAL_FRET_LENGTH_IN_CM;
-
-  // Optimal case: Markers 1 and 5 are both present
-  const m1 = detected.find(m => m.id === 1);
-  const m5 = detected.find(m => m.id === 5);
-  if (m1 && m5) {
-    return {
-      start: m1.center,
-      end: m5.center,
-      poseStart: m1.pose,
-      poseEnd: m5.pose,
-      debug: {
-        detectedIds: detected.map(m => m.id),
-        firstId: 1,
-        lastId: 5,
-        firstCm: nutCm,
-        lastCm: endCm,
-        spanCm: endCm - nutCm,
-        k: 1.0,
-        kExtrap: 1.0,
-        uNut: 0,
-        uEnd: 1,
-        isPinnedNut: true,
-        isPinnedEnd: true,
-        allDetected: detected
-      }
-    };
-  }
 
   // Universal Fallback: Use the two detected markers with largest physical baseline
   const first = detected[0];
@@ -701,17 +674,20 @@ export function calculateGuitarFromMarkers(markers, markerPoses = null) {
   let uNut = 0;
   let uEnd = 1;
 
-  // Extrapolate Nut if Marker 1 is missing
-  if (first.id !== 1) {
-    uNut = (nutCm - first.cm) / spanCm; // negative or 0
+  // Project Nut (0.0 cm) from the detected marker span
+  if (Math.abs(first.cm - nutCm) > 0.05) {
+    uNut = (nutCm - first.cm) / spanCm; // e.g. (0 - (-6.8)) / 56.8 = 0.1197
     start = projectPoint(uNut);
   }
 
-  // Extrapolate End (body) if Marker 5 is missing
-  if (last.id !== 5) {
+  // Project End (50.0 cm) from the detected marker span
+  if (Math.abs(last.cm - endCm) > 0.05) {
     uEnd = (endCm - first.cm) / spanCm; // > 1
     end = projectPoint(uEnd);
   }
+
+  const m1 = detected.find(m => m.id === 1);
+  const m5 = detected.find(m => m.id === 5);
 
   return {
     start,
@@ -729,8 +705,8 @@ export function calculateGuitarFromMarkers(markers, markerPoses = null) {
       kExtrap,
       uNut,
       uEnd,
-      isPinnedNut: first.id === 1,
-      isPinnedEnd: last.id === 5,
+      isPinnedNut: first.id === 1 && Math.abs(first.cm - nutCm) <= 0.05,
+      isPinnedEnd: last.id === 5 && Math.abs(last.cm - endCm) <= 0.05,
       allDetected: detected
     }
   };
