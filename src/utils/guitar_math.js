@@ -354,7 +354,7 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
         rFromPose = zEnd / zNut;
       }
     } else {
-      // Find any pair with poses to estimate depth ratio
+      // Find any pair with poses to estimate depth ratio - require wide baseline (>= 28cm)
       const posesWithCm = [];
       for (const [idStr, posCm] of Object.entries(ARUCO_MARKER_MAP)) {
         const id = parseInt(idStr, 10);
@@ -367,7 +367,8 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
         const pFirst = posesWithCm[0];
         const pLast = posesWithCm[posesWithCm.length - 1];
         const span = pLast.cm - pFirst.cm;
-        if (span > 0) {
+        // Require wide span (>= 28cm, e.g. Marker 2 to 5 = 33.2cm) to avoid extrapolating noise across short baselines (e.g. 3-4 = 8.5cm)
+        if (span >= 28.0) {
           const wFirst = 1 / pFirst.z;
           const wLast = 1 / pLast.z;
           const nutCm = ARUCO_MARKER_MAP[1] !== undefined ? ARUCO_MARKER_MAP[1] : 0.0;
@@ -393,15 +394,16 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
   const invZEnd = endNeckWidth / 5.6;
   const rFromWidth = (invZEnd > 0) ? (invZNut / invZEnd) : 1.0;
 
-  if (rFromPose && rFromPose > 0.35 && rFromPose < 2.8) {
+  if (rFromPose && rFromPose > 0.70 && rFromPose < 1.40) {
     depthRatio = rFromPose;
-  } else if (rFromMarkers && rFromMarkers > 0.35 && rFromMarkers < 2.8) {
+  } else if (rFromMarkers && rFromMarkers > 0.70 && rFromMarkers < 1.40) {
     depthRatio = rFromMarkers;
-  } else if (rFromWidth > 0.35 && rFromWidth < 2.8) {
+  } else if (rFromWidth > 0.70 && rFromWidth < 1.40) {
     depthRatio = rFromWidth;
   }
 
-  depthRatio = Math.max(0.35, Math.min(2.8, depthRatio));
+  // Clamp to realistic physical range (guitar normal to webcam rarely exceeds 0.75..1.30)
+  depthRatio = Math.max(0.75, Math.min(1.30, depthRatio));
 
   return {
     start,

@@ -464,10 +464,7 @@ export default function ARCamera({
       video: { width, height },
       track: { label: track?.label || '', settings: trackSettings },
       settings: {
-        arucoResolution: arucoResolutionRef.current,
         captureResolution: captureResolutionRef.current,
-        handCadence: handCadenceRef.current,
-        numHands: numHandsTrackingRef.current,
         neckWidthScale: neckWidthScaleRef.current,
         fretScaleLength: fretScaleLengthRef.current,
         mirroredDisplay: isMirroredRef.current,
@@ -1129,7 +1126,12 @@ export default function ARCamera({
 
           const smoothNutWidth = prev.nutNeckWidth + (rawNeck.nutNeckWidth - prev.nutNeckWidth) * alpha;
           const smoothEndWidth = prev.endNeckWidth + (rawNeck.endNeckWidth - prev.endNeckWidth) * alpha;
-          const smoothDepthRatio = (prev.depthRatio || 1.0) + ((rawNeck.depthRatio || 1.0) - (prev.depthRatio || 1.0)) * alpha;
+          // Dedicated deadband + low-pass filter for depthRatio to prevent stationary fret wander
+          const drTarget = Math.max(0.75, Math.min(1.30, rawNeck.depthRatio || 1.0));
+          const drPrev = prev.depthRatio || 1.0;
+          const drDelta = drTarget - drPrev;
+          // Ignore small frame-to-frame noise jitter (< 0.025); smooth deliberate guitar angle changes gently
+          const smoothDepthRatio = Math.abs(drDelta) > 0.025 ? drPrev + drDelta * 0.06 : drPrev;
 
           smoothedNeckRef.current = {
             ...rawNeck,
