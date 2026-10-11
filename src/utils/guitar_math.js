@@ -275,6 +275,61 @@ export function calculateFretAndStringPiecewise(markers, fingerPos, roundString 
 }
 
 /**
+ * Extract cross-neck (fret-parallel) unit vector from an ArUco marker's corners
+ * Captures true perspective trapezium tilt from physical square marker borders.
+ */
+export function extractMarkerCrossVector(marker, unitAxis, defaultPerp) {
+  if (!marker || !marker.corners || marker.corners.length < 4) return null;
+  const c = marker.corners;
+
+  // Opposite edge vectors:
+  // Edge pair A: (c1 - c0) and (c2 - c3)
+  const ax = ((c[1].x - c[0].x) + (c[2].x - c[3].x)) * 0.5;
+  const ay = ((c[1].y - c[0].y) + (c[2].y - c[3].y)) * 0.5;
+
+  // Edge pair B: (c2 - c1) and (c3 - c0)
+  const bx = ((c[2].x - c[1].x) + (c[3].x - c[0].x)) * 0.5;
+  const by = ((c[2].y - c[1].y) + (c[3].y - c[0].y)) * 0.5;
+
+  const lenA = Math.hypot(ax, ay);
+  const lenB = Math.hypot(bx, by);
+  if (lenA < 1 || lenB < 1) return null;
+
+  const uAx = ax / lenA, uAy = ay / lenA;
+  const uBx = bx / lenB, uBy = by / lenB;
+
+  // The edge pair with smaller absolute dot product with neck axis is parallel to the frets
+  const dotA = Math.abs(uAx * unitAxis.x + uAy * unitAxis.y);
+  const dotB = Math.abs(uBx * unitAxis.x + uBy * unitAxis.y);
+
+  let vx = dotA < dotB ? uAx : uBx;
+  let vy = dotA < dotB ? uAy : uBy;
+
+  // Orient to match defaultPerp (pointing towards high strings)
+  if (vx * defaultPerp.x + vy * defaultPerp.y < 0) {
+    vx = -vx;
+    vy = -vy;
+  }
+
+  const vLen = Math.hypot(vx, vy);
+  return vLen > 0 ? { x: vx / vLen, y: vy / vLen } : null;
+}
+
+/**
+ * Compute the local perspective cross-neck unit vector at fractional position t along the neck
+ * (t = 0 at nut, t = 1 at body/22nd fret)
+ */
+export function getPerpAt(t, geometry) {
+  if (geometry && geometry.perpNut && geometry.perpEnd) {
+    const vx = (1 - t) * geometry.perpNut.x + t * geometry.perpEnd.x;
+    const vy = (1 - t) * geometry.perpNut.y + t * geometry.perpEnd.y;
+    const len = Math.hypot(vx, vy);
+    if (len > 0) return { x: vx / len, y: vy / len };
+  }
+  return { x: geometry?.perpX ?? 0, y: geometry?.perpY ?? 1 };
+}
+
+/**
  * Compute unified 2D neck geometry from detected markers and user scale
  * Single source of truth for both drawing and hit-testing
  */
@@ -290,8 +345,10 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
   const len = Math.hypot(dx, dy);
   if (len === 0) return null;
 
+  const unitAxis = { x: dx / len, y: dy / len };
   const perpX = -dy / len;
   const perpY = dx / len;
+  const defaultPerp = { x: perpX, y: perpY };
 
   // Helper: cross-neck width of a marker projected across (perpX, perpY)
   const getCrossWidth = (m) => {
@@ -307,7 +364,8 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
     const m = markers[id];
     if (m && (m.center || m.corners)) {
       const cw = getCrossWidth(m);
-      detected.push({ id, cm: posCm, crossWidth: cw, center: m.center });
+      const crossVec = extractMarkerCrossVector(m, unitAxis, defaultPerp);
+      detected.push({ id, cm: posCm, crossWidth: cw, center: m.center, crossVec });
     }
   }
   detected.sort((a, b) => a.cm - b.cm);
@@ -390,6 +448,45 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
   // Clamp to realistic physical range for guitar facing webcam (prevents accordion expansion)
   depthRatio = Math.max(0.85, Math.min(1.05, depthRatio));
 
+  // Compute local perspective tilt vectors perpNut and perpEnd from detected marker corners
+  let perpNut = { ...defaultPerp };
+  let perpEnd = { ...defaultPerp };
+
+  const markersWithCross = detected.filter(d => d.crossVec);
+  if (markersWithCross.length === 1) {
+    perpNut = { ...markersWithCross[0].crossVec };
+    perpEnd = { ...markersWithCross[0].crossVec };
+  } else if (markersWithCross.length >= 2) {
+    const mNut = markersWithCross[0];
+    const mEnd = markersWithCross[markersWithCross.length - 1];
+    const span = mEnd.cm - mNut.cm;
+    if (span > 15) {
+      const interpVec = (u) => {
+        const uClamped = Math.max(-0.25, Math.min(1.25, u));
+        const vx = (1 - uClamped) * mNut.crossVec.x + uClamped * mEnd.crossVec.x;
+        const vy = (1 - uClamped) * mNut.crossVec.y + uClamped * mEnd.crossVec.y;
+        const l = Math.hypot(vx, vy);
+        return l > 0 ? { x: vx / l, y: vy / l } : defaultPerp;
+      };
+      const uNut = (0.0 - mNut.cm) / span;
+      const uEnd = (effectiveTotalLength - mNut.cm) / span;
+      perpNut = interpVec(uNut);
+      perpEnd = interpVec(uEnd);
+    } else {
+      perpNut = { ...mNut.crossVec };
+      perpEnd = { ...mEnd.crossVec };
+    }
+  }
+
+  // Safety guard against wild angles (> 45 deg deviation from 2D normal)
+  const sanitizeVector = (v) => {
+    if (!v) return defaultPerp;
+    const dot = v.x * defaultPerp.x + v.y * defaultPerp.y;
+    return dot < 0.70 ? defaultPerp : v;
+  };
+  perpNut = sanitizeVector(perpNut);
+  perpEnd = sanitizeVector(perpEnd);
+
   return {
     start,
     end,
@@ -398,6 +495,8 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
     len,
     perpX,
     perpY,
+    perpNut,
+    perpEnd,
     nutNeckWidth,
     endNeckWidth,
     depthRatio,
@@ -415,7 +514,7 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
 export function calculateFretAndStringFromGeometry(geometry, fingerPos, roundString = true) {
   if (!geometry || !fingerPos) return [0, 0, 0];
 
-  const { start, dx, dy, len, perpX, perpY, nutNeckWidth, endNeckWidth, depthRatio, totalFretLength } = geometry;
+  const { start, dx, dy, len, nutNeckWidth, endNeckWidth, depthRatio, totalFretLength } = geometry;
   const p3x = fingerPos.x;
   const p3y = fingerPos.y;
   const r = depthRatio || 1.0;
@@ -434,12 +533,14 @@ export function calculateFretAndStringFromGeometry(geometry, fingerPos, roundStr
   const fretIdx = searchSorted(FRET_ABSOLUTE_DISTANCES_FROM_NUT, fretLocator);
   const fretNumber = fretIdx + 1;
 
-  // 2. String Hit-Testing: Exact mathematical match to drawn strings
+  // 2. String Hit-Testing: Exact mathematical match to drawn strings under perspective tilt
   const cx = start.x + tScreen * dx;
   const cy = start.y + tScreen * dy;
 
-  // Lateral distance across the neck in pixels along (perpX, perpY)
-  const lateralDistPx = (p3x - cx) * perpX + (p3y - cy) * perpY;
+  const localPerp = getPerpAt(tScreen, geometry);
+
+  // Lateral distance across the neck in pixels along local tilted (perpX, perpY)
+  const lateralDistPx = (p3x - cx) * localPerp.x + (p3y - cy) * localPerp.y;
 
   // Local string spread matches the 0.88 margin used in drawGuitarOnCanvas
   const localNeckWidth = nutNeckWidth + tScreen * (endNeckWidth - nutNeckWidth);
@@ -483,7 +584,16 @@ export function getFretPositionAndWidth(fretDist, geometry) {
   const fy = start.y + tScreen * dy;
   const fWidth = Math.max(10, nutNeckWidth + tScreen * (endNeckWidth - nutNeckWidth));
 
-  return { fx, fy, fWidth };
+  const perp = getPerpAt(tScreen, geometry);
+
+  return {
+    fx,
+    fy,
+    fWidth,
+    perpX: perp.x,
+    perpY: perp.y,
+    tScreen
+  };
 }
 
 /**

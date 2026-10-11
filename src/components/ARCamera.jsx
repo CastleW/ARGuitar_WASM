@@ -3,6 +3,7 @@ import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, C
 import { detectMarkers, DETECTOR_CONFIG } from '../utils/aruco_detector';
 import {
   getNeckGeometry,
+  getPerpAt,
   calculateFretAndStringFromGeometry,
   getFretPositionAndWidth,
   createCameraMats,
@@ -1124,6 +1125,23 @@ export default function ARCamera({
           const sPerpX = sLen > 0 ? -sDy / sLen : rawNeck.perpX;
           const sPerpY = sLen > 0 ? sDx / sLen : rawNeck.perpY;
 
+          // Smooth local perspective tilt vectors (perpNut, perpEnd)
+          let smoothPerpNut = rawNeck.perpNut;
+          if (prev.perpNut && rawNeck.perpNut) {
+            const pnx = prev.perpNut.x + (rawNeck.perpNut.x - prev.perpNut.x) * alpha;
+            const pny = prev.perpNut.y + (rawNeck.perpNut.y - prev.perpNut.y) * alpha;
+            const pnLen = Math.hypot(pnx, pny);
+            smoothPerpNut = pnLen > 0 ? { x: pnx / pnLen, y: pny / pnLen } : rawNeck.perpNut;
+          }
+
+          let smoothPerpEnd = rawNeck.perpEnd;
+          if (prev.perpEnd && rawNeck.perpEnd) {
+            const pex = prev.perpEnd.x + (rawNeck.perpEnd.x - prev.perpEnd.x) * alpha;
+            const pey = prev.perpEnd.y + (rawNeck.perpEnd.y - prev.perpEnd.y) * alpha;
+            const peLen = Math.hypot(pex, pey);
+            smoothPerpEnd = peLen > 0 ? { x: pex / peLen, y: pey / peLen } : rawNeck.perpEnd;
+          }
+
           const smoothNutWidth = prev.nutNeckWidth + (rawNeck.nutNeckWidth - prev.nutNeckWidth) * alpha;
           const smoothEndWidth = prev.endNeckWidth + (rawNeck.endNeckWidth - prev.endNeckWidth) * alpha;
           // Dedicated deadband + low-pass filter for depthRatio to prevent stationary fret wander
@@ -1142,6 +1160,8 @@ export default function ARCamera({
             len: sLen,
             perpX: sPerpX,
             perpY: sPerpY,
+            perpNut: smoothPerpNut,
+            perpEnd: smoothPerpEnd,
             nutNeckWidth: smoothNutWidth,
             endNeckWidth: smoothEndWidth,
             depthRatio: smoothDepthRatio,
@@ -1683,10 +1703,12 @@ export default function ARCamera({
               const prevDist = fret === 1 ? 0.0 : FRET_ABSOLUTE_DISTANCES_FROM_NUT[fret - 2];
               const midFretDist = (curDist + prevDist) / 2;
 
-              const { fx, fy, fWidth } = getFretPositionAndWidth(midFretDist, neckGeometry);
+              const { fx, fy, fWidth, perpX: fPerpX, perpY: fPerpY } = getFretPositionAndWidth(midFretDist, neckGeometry);
               const tString = ((str - 1) / 5 - 0.5) * 0.88;
-              const targetX = fx + (tString * fWidth) * perpX;
-              const targetY = fy + (tString * fWidth) * perpY;
+              const px = fPerpX ?? perpX;
+              const py = fPerpY ?? perpY;
+              const targetX = fx + (tString * fWidth) * px;
+              const targetY = fy + (tString * fWidth) * py;
 
               const isFrettedByPlayer = trackedFingers.some(
                 f => f.isActive && f.string === str && f.fret === fret
@@ -1752,10 +1774,12 @@ export default function ARCamera({
           if (fretDist !== undefined) {
             const prevDist = f.fret > 1 ? FRET_ABSOLUTE_DISTANCES_FROM_NUT[f.fret - 2] : 0.0;
             const midFretDist = (fretDist + prevDist) / 2;
-            const { fx, fy, fWidth } = getFretPositionAndWidth(midFretDist, neckGeometry);
+            const { fx, fy, fWidth, perpX: fPerpX, perpY: fPerpY } = getFretPositionAndWidth(midFretDist, neckGeometry);
             const tString = ((f.string - 1) / 5 - 0.5) * 0.88;
-            const nx = fx + (tString * fWidth) * neckGeometry.perpX;
-            const ny = fy + (tString * fWidth) * neckGeometry.perpY;
+            const px = fPerpX ?? neckGeometry.perpX;
+            const py = fPerpY ?? neckGeometry.perpY;
+            const nx = fx + (tString * fWidth) * px;
+            const ny = fy + (tString * fWidth) * py;
 
             activeFretPoints.push({ x: nx, y: ny, string: f.string, fret: f.fret, color: f.color });
 
@@ -2018,15 +2042,17 @@ export default function ARCamera({
   const drawGuitarOnCanvas = (ctx, geometry) => {
     const { start, dx, dy, perpX, perpY, nutNeckWidth, endNeckWidth } = geometry;
 
-    // 1. Draw Frets across the full neck width (perspective-correct)
+    // 1. Draw Frets across the full neck width (perspective-correct trapezium)
     FRETS_FOR_DRAWING.forEach(fretDist => {
-      const { fx, fy, fWidth } = getFretPositionAndWidth(fretDist, geometry);
+      const { fx, fy, fWidth, perpX: fPerpX, perpY: fPerpY } = getFretPositionAndWidth(fretDist, geometry);
+      const px = fPerpX ?? perpX;
+      const py = fPerpY ?? perpY;
 
       // Draw perpendicular fret line across the full neck
-      const x1 = fx + (fWidth / 2) * perpX;
-      const y1 = fy + (fWidth / 2) * perpY;
-      const x2 = fx - (fWidth / 2) * perpX;
-      const y2 = fy - (fWidth / 2) * perpY;
+      const x1 = fx + (fWidth / 2) * px;
+      const y1 = fy + (fWidth / 2) * py;
+      const x2 = fx - (fWidth / 2) * px;
+      const y2 = fy - (fWidth / 2) * py;
 
       ctx.lineWidth = fretDist === 0 ? 5 : 2; // Thicker line for nut (fret 0)
       ctx.strokeStyle = fretDist === 0 ? "rgba(6, 182, 212, 0.85)" : "rgba(34, 197, 94, 0.85)"; // High-visibility neon green
@@ -2034,17 +2060,23 @@ export default function ARCamera({
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
       ctx.stroke();
+    });
 
-      // Draw Fret Number Label un-mirrored
-      if (fretDist > 0) {
-        const idx = FRET_ABSOLUTE_DISTANCES_FROM_NUT.indexOf(fretDist) + 1;
-        drawUnmirroredText(ctx, idx.toString(), fx, fy - fWidth / 2 - 8, {
-          font: '10px monospace',
-          fillStyle: 'rgba(134, 239, 172, 0.9)',
-          align: 'center',
-          baseline: 'bottom'
-        });
-      }
+    // Draw Fret Number Labels centered between consecutive frets
+    FRET_ABSOLUTE_DISTANCES_FROM_NUT.forEach((curDist, idx) => {
+      const fretNum = idx + 1;
+      const prevDist = idx === 0 ? 0.0 : FRET_ABSOLUTE_DISTANCES_FROM_NUT[idx - 1];
+      const midDist = (prevDist + curDist) / 2;
+      const { fx, fy, fWidth, perpX: mPerpX, perpY: mPerpY } = getFretPositionAndWidth(midDist, geometry);
+      const px = mPerpX ?? perpX;
+      const py = mPerpY ?? perpY;
+
+      drawUnmirroredText(ctx, fretNum.toString(), fx - (fWidth / 2 + 8) * px, fy - (fWidth / 2 + 8) * py, {
+        font: '10px monospace',
+        fillStyle: 'rgba(134, 239, 172, 0.9)',
+        align: 'center',
+        baseline: 'middle'
+      });
     });
 
     // 2. Draw Strumming Zone over guitar body (t: 0.92 to 1.38)
@@ -2052,16 +2084,18 @@ export default function ARCamera({
     const tStrum2 = 1.38;
     const wStrum1 = endNeckWidth * 1.12;
     const wStrum2 = endNeckWidth * 1.28;
+    const vStrum1 = getPerpAt(tStrum1, geometry);
+    const vStrum2 = getPerpAt(tStrum2, geometry);
 
-    const sz1X = start.x + tStrum1 * dx + (wStrum1 / 2) * perpX;
-    const sz1Y = start.y + tStrum1 * dy + (wStrum1 / 2) * perpY;
-    const sz2X = start.x + tStrum1 * dx - (wStrum1 / 2) * perpX;
-    const sz2Y = start.y + tStrum1 * dy - (wStrum1 / 2) * perpY;
+    const sz1X = start.x + tStrum1 * dx + (wStrum1 / 2) * vStrum1.x;
+    const sz1Y = start.y + tStrum1 * dy + (wStrum1 / 2) * vStrum1.y;
+    const sz2X = start.x + tStrum1 * dx - (wStrum1 / 2) * vStrum1.x;
+    const sz2Y = start.y + tStrum1 * dy - (wStrum1 / 2) * vStrum1.y;
 
-    const sz3X = start.x + tStrum2 * dx - (wStrum2 / 2) * perpX;
-    const sz3Y = start.y + tStrum2 * dy - (wStrum2 / 2) * perpY;
-    const sz4X = start.x + tStrum2 * dx + (wStrum2 / 2) * perpX;
-    const sz4Y = start.y + tStrum2 * dy + (wStrum2 / 2) * perpY;
+    const sz3X = start.x + tStrum2 * dx - (wStrum2 / 2) * vStrum2.x;
+    const sz3Y = start.y + tStrum2 * dy - (wStrum2 / 2) * vStrum2.y;
+    const sz4X = start.x + tStrum2 * dx + (wStrum2 / 2) * vStrum2.x;
+    const sz4Y = start.y + tStrum2 * dy + (wStrum2 / 2) * vStrum2.y;
 
     ctx.save();
     // Glowing amber background fill
@@ -2082,10 +2116,12 @@ export default function ARCamera({
     ctx.setLineDash([]);
 
     // Strum Zone Label
-    const szMidX = start.x + ((tStrum1 + tStrum2) / 2) * dx;
-    const szMidY = start.y + ((tStrum1 + tStrum2) / 2) * dy;
+    const tStrumMid = (tStrum1 + tStrum2) / 2;
+    const szMidX = start.x + tStrumMid * dx;
+    const szMidY = start.y + tStrumMid * dy;
+    const vStrumMid = getPerpAt(tStrumMid, geometry);
     const labelOffset = (wStrum1 + wStrum2) / 4 + 10;
-    drawUnmirroredText(ctx, '⚡ STRUM ZONE', szMidX + labelOffset * perpX, szMidY + labelOffset * perpY, {
+    drawUnmirroredText(ctx, '⚡ STRUM ZONE', szMidX + labelOffset * vStrumMid.x, szMidY + labelOffset * vStrumMid.y, {
       font: 'bold 10px monospace',
       fillStyle: 'rgba(245, 158, 11, 0.85)',
       align: 'center',
@@ -2097,16 +2133,18 @@ export default function ARCamera({
     const tBridge = 1.38;
     const bridgeNeckWidth = endNeckWidth * 1.15;
     const nowTime = performance.now();
+    const vNut = getPerpAt(0.0, geometry);
+    const vBridge = getPerpAt(tBridge, geometry);
 
     for (let s = 1; s <= 6; ++s) {
       const tString = ((s - 1) / 5 - 0.5) * 0.88;
 
-      const x1 = start.x + (tString * nutNeckWidth) * perpX;
-      const y1 = start.y + (tString * nutNeckWidth) * perpY;
+      const x1 = start.x + (tString * nutNeckWidth) * vNut.x;
+      const y1 = start.y + (tString * nutNeckWidth) * vNut.y;
 
       // Extend to the bridge across the strum zone
-      const xBridge = start.x + tBridge * dx + (tString * bridgeNeckWidth) * perpX;
-      const yBridge = start.y + tBridge * dy + (tString * bridgeNeckWidth) * perpY;
+      const xBridge = start.x + tBridge * dx + (tString * bridgeNeckWidth) * vBridge.x;
+      const yBridge = start.y + tBridge * dy + (tString * bridgeNeckWidth) * vBridge.y;
 
       // Check if this string is currently vibrating from a recent pick/strum
       const lastStrumTime = vibratingStringsRef.current[s] || 0;
