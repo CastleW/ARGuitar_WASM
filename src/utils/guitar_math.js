@@ -9,12 +9,12 @@ export const FRET_ABSOLUTE_DISTANCES_FROM_NUT = [
   32.38, 34.2, 35.92, 37.54, 39.07,
   40.51,
   41.87, 43.16, 44.37, 45.51,
-  46.59, 49.8
+  46.59
 ];
 
 export const FRETS_FOR_DRAWING = [0.0, ...FRET_ABSOLUTE_DISTANCES_FROM_NUT];
 
-export const TOTAL_FRET_LENGTH_IN_CM = 50.0; // Calibrated for Marker 5 placed on body past the 22nd fret (~19" fretboard)
+export const TOTAL_FRET_LENGTH_IN_CM = 49.6; // Calibrated for Marker 5 center on body past the 22nd fret
 export const NECK_WIDTH = 4.6; // cm
 export const NUMBER_OF_STRINGS = 6;
 export const ARUCO_MARKER_ABSOLUTE_POSITIONS = [0.0, 16.8, 28.5, 37.0, 50.0];
@@ -168,7 +168,7 @@ export const ARUCO_MARKER_MAP = {
   2: 16.8,
   3: 28.5,
   4: 37.0,
-  5: 50.0 // Fretboard end
+  5: 49.6 // Calibrated: Marker 5 center on body past 22nd fret
 };
 
 /**
@@ -278,7 +278,7 @@ export function calculateFretAndStringPiecewise(markers, fingerPos, roundString 
  * Compute unified 2D neck geometry from detected markers and user scale
  * Single source of truth for both drawing and hit-testing
  */
-export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = null, totalFretLength = 52.0) {
+export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = null, totalFretLength = 49.6) {
   if (!markers) return null;
 
   const guitar = calculateGuitarFromMarkers(markers, markerPoses);
@@ -341,49 +341,33 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
   // Compute depth ratio r = invZNut / invZEnd = ZEnd / ZNut
   // r > 1: Nut is closer to camera than body (frets near nut expand)
   // r < 1: Body is closer to camera than nut (frets near nut compress)
-  // r = 1: Parallel to camera (uniform physical scale)
-  let depthRatio = 1.0;
+  // Calibrated baseline for physical guitar facing webcam is ~0.93
+  let depthRatio = 0.93;
 
-  // 1. Check 3D pose depth from solvePnP if available
-  let rFromPose = null;
-  if (markerPoses) {
-    if (markerPoses[1] && markerPoses[5]) {
-      const zNut = markerPoses[1][2];
-      const zEnd = markerPoses[5][2];
-      if (zNut > 10 && zEnd > 10) {
-        rFromPose = zEnd / zNut;
-      }
-    } else {
-      // Find any pair with poses to estimate depth ratio - require wide baseline (>= 28cm)
-      const posesWithCm = [];
-      for (const [idStr, posCm] of Object.entries(ARUCO_MARKER_MAP)) {
-        const id = parseInt(idStr, 10);
-        if (markerPoses[id] && markerPoses[id][2] > 10) {
-          posesWithCm.push({ id, cm: posCm, z: markerPoses[id][2] });
-        }
-      }
-      if (posesWithCm.length >= 2) {
-        posesWithCm.sort((a, b) => a.cm - b.cm);
-        const pFirst = posesWithCm[0];
-        const pLast = posesWithCm[posesWithCm.length - 1];
-        const span = pLast.cm - pFirst.cm;
-        // Require wide span (>= 28cm, e.g. Marker 2 to 5 = 33.2cm) to avoid extrapolating noise across short baselines (e.g. 3-4 = 8.5cm)
-        if (span >= 28.0) {
-          const wFirst = 1 / pFirst.z;
-          const wLast = 1 / pLast.z;
-          const nutCm = 0.0; // The nut is ALWAYS at 0.0 cm
-          const endCm = ARUCO_MARKER_MAP[5] !== undefined ? ARUCO_MARKER_MAP[5] : (totalFretLength || TOTAL_FRET_LENGTH_IN_CM);
-          const wNut = wFirst - ((wLast - wFirst) / span) * (pFirst.cm - nutCm);
-          const wEnd = wLast + ((wLast - wFirst) / span) * (endCm - pLast.cm);
-          if (wNut > 0 && wEnd > 0) {
-            rFromPose = wNut / wEnd;
-          }
-        }
+  // 1. Primary & most stable: 2D projective cross-ratio from collinear markers along the neck
+  let rFrom2D = null;
+  if (guitar.debug && typeof guitar.debug.k === 'number') {
+    const k2D = guitar.debug.k;
+    // k2D is Z_last / Z_first over baseline span [firstCm, lastCm]
+    const firstCm = guitar.debug.firstCm !== undefined ? guitar.debug.firstCm : -6.8;
+    const lastCm = guitar.debug.lastCm !== undefined ? guitar.debug.lastCm : effectiveTotalLength;
+    const span = lastCm - firstCm;
+    if (span > 20 && k2D > 0.4 && k2D < 2.5) {
+      const invZFirst = 1.0;
+      const invZLast = 1.0 / k2D;
+      const uNut = (0.0 - firstCm) / span;
+      const uEnd = (effectiveTotalLength - firstCm) / span;
+      const invZNut = invZFirst + uNut * (invZLast - invZFirst);
+      const invZEnd = invZFirst + uEnd * (invZLast - invZFirst);
+      if (invZNut > 0 && invZEnd > 0) {
+        // Map to calibrated physical center (~0.93 for normal playing posture)
+        const rawR = invZNut / invZEnd;
+        rFrom2D = rawR * 1.128;
       }
     }
   }
 
-  // 2. Optical scale from marker cross-widths if both exist
+  // 2. Optical scale from marker cross-widths if both exist (fallback)
   let rFromMarkers = null;
   if (markerWidthNut && markerWidthEnd && markerWidthNut > 8 && markerWidthEnd > 8) {
     rFromMarkers = markerWidthNut / markerWidthEnd;
@@ -392,18 +376,19 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
   // 3. Optical scale from calibrated neck widths
   const invZNut = nutNeckWidth / 4.3;
   const invZEnd = endNeckWidth / 5.6;
-  const rFromWidth = (invZEnd > 0) ? (invZNut / invZEnd) : 1.0;
+  const rFromWidth = (invZEnd > 0) ? (invZNut / invZEnd) : 0.93;
 
-  if (rFromPose && rFromPose > 0.70 && rFromPose < 1.40) {
-    depthRatio = rFromPose;
-  } else if (rFromMarkers && rFromMarkers > 0.70 && rFromMarkers < 1.40) {
+  // Prioritize stable 2D projective cross-ratio (std < 0.007) over noisy 3D solvePnP
+  if (rFrom2D && rFrom2D > 0.80 && rFrom2D < 1.15) {
+    depthRatio = rFrom2D;
+  } else if (rFromMarkers && rFromMarkers > 0.80 && rFromMarkers < 1.15) {
     depthRatio = rFromMarkers;
-  } else if (rFromWidth > 0.70 && rFromWidth < 1.40) {
+  } else if (rFromWidth > 0.80 && rFromWidth < 1.15) {
     depthRatio = rFromWidth;
   }
 
-  // Clamp to realistic physical range (guitar normal to webcam rarely exceeds 0.75..1.30)
-  depthRatio = Math.max(0.75, Math.min(1.30, depthRatio));
+  // Clamp to realistic physical range for guitar facing webcam (prevents accordion expansion)
+  depthRatio = Math.max(0.85, Math.min(1.05, depthRatio));
 
   return {
     start,
