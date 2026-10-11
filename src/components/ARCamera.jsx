@@ -405,7 +405,9 @@ export default function ARCamera({
 
   const [fretScaleLength, setFretScaleLength] = useState(() => {
     const saved = localStorage.getItem('arguitar_fret_scale');
-    return saved ? parseFloat(saved) : 49.6;
+    const val = saved ? parseFloat(saved) : 51.9;
+    // Migrate previous uncalibrated 49.6cm to calibrated 51.9cm baseline
+    return (val === 49.6 || !saved) ? 51.9 : val;
   });
   const fretScaleLengthRef = useRef(fretScaleLength);
   useEffect(() => {

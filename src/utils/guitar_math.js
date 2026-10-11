@@ -14,10 +14,10 @@ export const FRET_ABSOLUTE_DISTANCES_FROM_NUT = [
 
 export const FRETS_FOR_DRAWING = [0.0, ...FRET_ABSOLUTE_DISTANCES_FROM_NUT];
 
-export const TOTAL_FRET_LENGTH_IN_CM = 49.6; // Calibrated for Marker 5 center on body past the 22nd fret
+export const TOTAL_FRET_LENGTH_IN_CM = 51.9; // Calibrated for Marker 5 center on body past the 22nd fret
 export const NECK_WIDTH = 4.6; // cm
 export const NUMBER_OF_STRINGS = 6;
-export const ARUCO_MARKER_ABSOLUTE_POSITIONS = [0.0, 16.8, 28.5, 37.0, 50.0];
+export const ARUCO_MARKER_ABSOLUTE_POSITIONS = [-5.65, 15.5, 27.3, 36.6, 51.9];
 
 // Default camera matrix (derived from MultiMatrix.npz)
 export const DEFAULT_CAM_MATRIX = [
@@ -164,11 +164,11 @@ export const ARUCO_MARKER_MAP = {
 */
 
 export const ARUCO_MARKER_MAP = {
-  1: -6.8, // Calibrated: Marker 1 on headstock (4.6cm nut-to-edge + 2.2cm to center)
-  2: 16.8,
-  3: 28.5,
-  4: 37.0,
-  5: 49.6 // Calibrated: Marker 5 center on body past 22nd fret
+  1: -5.65, // Calibrated: Marker 1 on headstock (4.6cm nut-to-edge + 1.05cm to center)
+  2: 15.5,  // Calibrated: Marker 2 centered over 5th fret
+  3: 27.3,  // Calibrated: Marker 3 centered over 9th/10th fret
+  4: 36.6,  // Calibrated: Marker 4 centered over 14th/15th fret
+  5: 51.9   // Calibrated: Marker 5 center on body past 22nd fret
 };
 
 /**
@@ -333,7 +333,7 @@ export function getPerpAt(t, geometry) {
  * Compute unified 2D neck geometry from detected markers and user scale
  * Single source of truth for both drawing and hit-testing
  */
-export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = null, totalFretLength = 49.6) {
+export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = null, totalFretLength = 51.9) {
   if (!markers) return null;
 
   const guitar = calculateGuitarFromMarkers(markers, markerPoses);
@@ -407,7 +407,7 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
   if (guitar.debug && typeof guitar.debug.k === 'number') {
     const k2D = guitar.debug.k;
     // k2D is Z_last / Z_first over baseline span [firstCm, lastCm]
-    const firstCm = guitar.debug.firstCm !== undefined ? guitar.debug.firstCm : -6.8;
+    const firstCm = guitar.debug.firstCm !== undefined ? guitar.debug.firstCm : -5.65;
     const lastCm = guitar.debug.lastCm !== undefined ? guitar.debug.lastCm : effectiveTotalLength;
     const span = lastCm - firstCm;
     if (span >= 25 && k2D > 0.35 && k2D < 2.5) {
