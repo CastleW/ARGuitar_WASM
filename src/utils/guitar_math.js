@@ -410,17 +410,14 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
     const firstCm = guitar.debug.firstCm !== undefined ? guitar.debug.firstCm : -6.8;
     const lastCm = guitar.debug.lastCm !== undefined ? guitar.debug.lastCm : effectiveTotalLength;
     const span = lastCm - firstCm;
-    if (span > 20 && k2D > 0.4 && k2D < 2.5) {
+    if (span >= 25 && k2D > 0.35 && k2D < 2.5) {
       const invZFirst = 1.0;
       const invZLast = 1.0 / k2D;
-      const uNut = (0.0 - firstCm) / span;
-      const uEnd = (effectiveTotalLength - firstCm) / span;
-      const invZNut = invZFirst + uNut * (invZLast - invZFirst);
-      const invZEnd = invZFirst + uEnd * (invZLast - invZFirst);
-      if (invZNut > 0 && invZEnd > 0) {
-        // Map to calibrated physical center (~0.93 for normal playing posture)
-        const rawR = invZNut / invZEnd;
-        rFrom2D = rawR * 1.128;
+      const slope = (invZLast - invZFirst) / span;
+      const invZNut = 1.0 + (0.0 - firstCm) * slope;
+      const invZEnd = 1.0 + (effectiveTotalLength - firstCm) * slope;
+      if (invZNut > 0.1 && invZEnd > 0.1) {
+        rFrom2D = invZNut / invZEnd;
       }
     }
   }
@@ -436,17 +433,17 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
   const invZEnd = endNeckWidth / 5.6;
   const rFromWidth = (invZEnd > 0) ? (invZNut / invZEnd) : 0.93;
 
-  // Prioritize stable 2D projective cross-ratio (std < 0.007) over noisy 3D solvePnP
-  if (rFrom2D && rFrom2D > 0.80 && rFrom2D < 1.15) {
+  // Prioritize stable 2D projective cross-ratio over optical widths
+  if (rFrom2D && rFrom2D >= 0.35 && rFrom2D <= 2.5) {
     depthRatio = rFrom2D;
-  } else if (rFromMarkers && rFromMarkers > 0.80 && rFromMarkers < 1.15) {
+  } else if (rFromMarkers && rFromMarkers >= 0.35 && rFromMarkers <= 2.5) {
     depthRatio = rFromMarkers;
-  } else if (rFromWidth > 0.80 && rFromWidth < 1.15) {
+  } else if (rFromWidth >= 0.35 && rFromWidth <= 2.5) {
     depthRatio = rFromWidth;
   }
 
-  // Clamp to realistic physical range for guitar facing webcam (prevents accordion expansion)
-  depthRatio = Math.max(0.85, Math.min(1.05, depthRatio));
+  // Clamp to realistic physical tilt range [0.40, 2.20] for guitar in front of player
+  depthRatio = Math.max(0.40, Math.min(2.20, depthRatio));
 
   // Compute local perspective tilt vectors perpNut and perpEnd from detected marker corners
   let perpNut = { ...defaultPerp };
@@ -710,29 +707,24 @@ export function calculateGuitarFromMarkers(markers, markerPoses = null) {
 
   // 2. Or from intermediate marker(s) using 1D projective invariant (cross-ratio)
   if (detected.length >= 3 && distSq > 0) {
-    // Pick the middle marker closest to the center of the baseline
-    const midTargetCm = (first.cm + last.cm) / 2;
-    let bestMid = detected[1];
-    let bestDiff = Math.abs(bestMid.cm - midTargetCm);
-    for (let i = 2; i < detected.length - 1; i++) {
-      const diff = Math.abs(detected[i].cm - midTargetCm);
-      if (diff < bestDiff) {
-        bestMid = detected[i];
-        bestDiff = diff;
+    const kCandidates = [];
+    for (let i = 1; i < detected.length - 1; i++) {
+      const mid = detected[i];
+      const uPhys = (mid.cm - first.cm) / spanCm;
+      const midDx = mid.center.x - first.center.x;
+      const midDy = mid.center.y - first.center.y;
+      const tScreen = (midDx * dx + midDy * dy) / distSq;
+
+      if (uPhys > 0.05 && uPhys < 0.95 && tScreen > 0.05 && tScreen < 0.95) {
+        // Cross-ratio odds: k = (tScreen / (1 - tScreen)) / (uPhys / (1 - uPhys))
+        const kFrom2D = (tScreen / (1 - tScreen)) / (uPhys / (1 - uPhys));
+        if (kFrom2D > 0.35 && kFrom2D < 2.5) {
+          kCandidates.push(kFrom2D);
+        }
       }
     }
-
-    const uPhys = (bestMid.cm - first.cm) / spanCm;
-    const midDx = bestMid.center.x - first.center.x;
-    const midDy = bestMid.center.y - first.center.y;
-    const tScreen = (midDx * dx + midDy * dy) / distSq;
-
-    if (uPhys > 0.05 && uPhys < 0.95 && tScreen > 0.05 && tScreen < 0.95) {
-      // Cross-ratio odds: k = (tScreen / (1 - tScreen)) / (uPhys / (1 - uPhys))
-      const kFrom2D = (tScreen / (1 - tScreen)) / (uPhys / (1 - uPhys));
-      if (kFrom2D > 0.45 && kFrom2D < 2.2) {
-        k = kFrom2D;
-      }
+    if (kCandidates.length > 0) {
+      k = kCandidates.reduce((sum, v) => sum + v, 0) / kCandidates.length;
     }
   }
 

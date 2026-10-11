@@ -1144,12 +1144,13 @@ export default function ARCamera({
 
           const smoothNutWidth = prev.nutNeckWidth + (rawNeck.nutNeckWidth - prev.nutNeckWidth) * alpha;
           const smoothEndWidth = prev.endNeckWidth + (rawNeck.endNeckWidth - prev.endNeckWidth) * alpha;
-          // Dedicated deadband + low-pass filter for depthRatio to prevent stationary fret wander
-          const drTarget = Math.max(0.75, Math.min(1.30, rawNeck.depthRatio || 1.0));
-          const drPrev = prev.depthRatio || 1.0;
+          // Adaptive depthRatio filtering: fast tracking when tilting, rock-solid when steady
+          const drTarget = Math.max(0.40, Math.min(2.20, rawNeck.depthRatio || 0.93));
+          const drPrev = prev.depthRatio || 0.93;
           const drDelta = drTarget - drPrev;
-          // Ignore small frame-to-frame noise jitter (< 0.025); smooth deliberate guitar angle changes gently
-          const smoothDepthRatio = Math.abs(drDelta) > 0.025 ? drPrev + drDelta * 0.06 : drPrev;
+          // When guitar moves or tilts, adapt with high responsiveness (0.25-0.45); when steady, smooth gently (0.18)
+          const drAlpha = Math.abs(drDelta) > 0.08 ? Math.max(0.25, alpha) : 0.18;
+          const smoothDepthRatio = Math.abs(drDelta) > 0.005 ? drPrev + drDelta * drAlpha : drPrev;
 
           smoothedNeckRef.current = {
             ...rawNeck,
