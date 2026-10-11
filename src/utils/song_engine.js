@@ -92,6 +92,107 @@ export const CHORD_FINGERINGS = {
   }
 };
 
+/**
+ * Formats a chord name or object into the clean structure expected by guitarAudio.strumChord
+ * @param {string|object} chordShortOrObj - e.g. 'C' or { name: 'C Major', short: 'C' }
+ * @returns {object|null}
+ */
+export function getPlayableChordObject(chordShortOrObj) {
+  if (!chordShortOrObj) return null;
+  const short = typeof chordShortOrObj === 'string' ? chordShortOrObj : (chordShortOrObj.short || chordShortOrObj.name);
+  const info = CHORD_FINGERINGS[short] || (typeof chordShortOrObj === 'object' ? chordShortOrObj : null);
+  if (!info) return null;
+
+  const frettedStrings = {};
+  if (info.frets) {
+    for (const [strStr, fData] of Object.entries(info.frets)) {
+      frettedStrings[parseInt(strStr, 10)] = typeof fData === 'object' ? fData.fret : fData;
+    }
+  } else if (info.frettedStrings) {
+    Object.assign(frettedStrings, info.frettedStrings);
+  }
+
+  return {
+    name: info.name || `${short} Chord`,
+    short: short,
+    quality: info.quality || (short.endsWith('m') ? 'minor' : 'major'),
+    frettedStrings,
+    mutedStrings: info.muted || info.mutedStrings || []
+  };
+}
+
+/**
+ * Evaluates whether the player's fretting is "close enough" to the target chord (Level 2 Assist)
+ * @param {Object} frettedMap - e.g. { 2: 1, 4: 2, 5: 3 } (string -> fret)
+ * @param {Object} targetChord - chord from CHORD_FINGERINGS
+ * @param {Object|null} activeChord - detected chord if any
+ * @returns {{ isClose: boolean, score: number, matches: number, description: string }}
+ */
+export function isChordCloseEnough(frettedMap = {}, targetChord, activeChord = null) {
+  if (!targetChord) return { isClose: false, score: 0, matches: 0, description: 'No target chord' };
+
+  // 1. If detected chord directly matches target chord (or same root/family)
+  if (activeChord) {
+    const actShort = activeChord.short || activeChord.shortName || activeChord.name;
+    if (actShort === targetChord.short || (actShort && actShort.startsWith(targetChord.short))) {
+      return { isClose: true, score: 1.0, matches: 3, description: 'Direct Match' };
+    }
+  }
+
+  const targetFrets = targetChord.frets || {};
+  const reqStrings = Object.keys(targetFrets).map(Number);
+  const totalReq = reqStrings.length;
+  if (totalReq === 0) {
+    // Open chord with no frets required
+    return { isClose: true, score: 1.0, matches: 0, description: 'Open Chord' };
+  }
+
+  let exactMatches = 0;
+  let nearFretMatches = 0;       // Same string, +/- 1 fret
+  let adjacentStringMatches = 0; // Same fret, adjacent string (+/- 1 string)
+
+  reqStrings.forEach(s => {
+    const targetFret = typeof targetFrets[s] === 'object' ? targetFrets[s].fret : targetFrets[s];
+    const playerFret = frettedMap[s];
+
+    if (playerFret === targetFret) {
+      exactMatches++;
+    } else if (playerFret !== undefined && Math.abs(playerFret - targetFret) === 1) {
+      nearFretMatches++;
+    }
+
+    // Check if player fretted the target fret on an adjacent string (s-1 or s+1)
+    if (frettedMap[s - 1] === targetFret || frettedMap[s + 1] === targetFret) {
+      adjacentStringMatches++;
+    }
+  });
+
+  // Calculate weighted proximity score:
+  // Exact match: 1.0 each
+  // Near fret match: 0.5 each
+  // Adjacent string match: 0.35 each
+  const weightedScore = (exactMatches * 1.0 + nearFretMatches * 0.5 + adjacentStringMatches * 0.35) / totalReq;
+
+  // Level 2 "Close Enough" Criterion:
+  // - At least 1 exact match (for 2-finger chords) or 1-2 exact matches (for 3-finger chords)
+  // - OR weighted proximity score >= 0.40
+  // - OR at least 2 near matches
+  const isClose = (exactMatches >= 1 && (totalReq <= 2 || exactMatches >= totalReq - 2)) ||
+                  (weightedScore >= 0.40) ||
+                  (exactMatches + nearFretMatches >= 2);
+
+  const desc = exactMatches >= 2 ? `${exactMatches}/${totalReq} fingers on fret` :
+               exactMatches === 1 ? `1/${totalReq} finger anchored (Close!)` :
+               nearFretMatches >= 1 ? `Near fret shape (+/-1 fret)` : 'Off shape';
+
+  return {
+    isClose,
+    score: Math.min(1.0, weightedScore),
+    matches: exactMatches,
+    description: desc
+  };
+}
+
 // Root note MIDI pitch for the backing bassline
 const CHORD_ROOT_MIDI = {
   'C': 36,   // C2
@@ -226,6 +327,10 @@ export class SongEngine {
     this.lookaheadMs = 25.0;
     this.scheduleAheadSec = 0.12;
 
+    // Difficulty Level: 1 = Beginner (Auto-Chord), 2 = Intermediate (Assist / Close Enough), 3 = Pro (Realistic)
+    const savedLevel = typeof localStorage !== 'undefined' ? parseInt(localStorage.getItem('arguitar_play_level'), 10) : 1;
+    this.playLevel = [1, 2, 3].includes(savedLevel) ? savedLevel : 1;
+
     // Hit evaluation and scoring
     this.score = 0;
     this.combo = 0;
@@ -235,6 +340,15 @@ export class SongEngine {
 
     // Listeners for UI state
     this.listeners = new Set();
+  }
+
+  setPlayLevel(level) {
+    const validLevel = [1, 2, 3].includes(level) ? level : 1;
+    this.playLevel = validLevel;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('arguitar_play_level', validLevel.toString());
+    }
+    this.notifyListeners('levelChange', { level: validLevel });
   }
 
   get effectiveBpm() {
@@ -570,32 +684,40 @@ export class SongEngine {
 
   /**
    * Evaluate player's live strum against the target chord and timing
+   * @param {string|null} playedChordName - Chord name/short
+   * @param {boolean} isAssist - True if Level 2 smart assist triggered
    */
-  evaluateStrum(playedChordName) {
+  evaluateStrum(playedChordName, isAssist = false) {
     if (!this.isPlaying) return null;
     const target = this.getTargetChord();
     if (!target) return null;
 
-    const isMatch = (playedChordName && (
+    const isDirectMatch = (playedChordName && (
       playedChordName === target.short ||
       playedChordName.startsWith(target.short + ' ') ||
       playedChordName === target.name
     ));
 
+    const isHit = isDirectMatch || isAssist;
     const now = performance.now();
     let rating;
     let points;
 
-    if (isMatch) {
+    if (isHit) {
       this.combo++;
       if (this.combo > this.maxCombo) {
         this.maxCombo = this.combo;
       }
-      rating = 'PERFECT!';
-      points = 100 + Math.min(200, this.combo * 15);
+      if (isAssist) {
+        rating = 'GOOD (ASSIST)!';
+        points = 75 + Math.min(150, this.combo * 10);
+      } else {
+        rating = 'PERFECT!';
+        points = 100 + Math.min(200, this.combo * 15);
+      }
       this.score += points;
     } else {
-      // Partial credit or miss
+      // Missed chord
       if (this.combo > 2) {
         this.combo = 0;
       }
@@ -603,7 +725,7 @@ export class SongEngine {
       points = 0;
     }
 
-    this.lastHitRating = { rating, points, time: now, isMatch, target: target.short };
+    this.lastHitRating = { rating, points, time: now, isMatch: isHit, isAssist, target: target.short };
     this.notifyListeners('hit', this.lastHitRating);
 
     return this.lastHitRating;

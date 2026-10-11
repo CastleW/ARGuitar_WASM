@@ -17,6 +17,7 @@ export default function SongHighway({
   const [isMetronomeEnabled, setIsMetronomeEnabled] = useState(songEngine.isMetronomeEnabled);
   const [score, setScore] = useState(songEngine.score);
   const [combo, setCombo] = useState(songEngine.combo);
+  const [playLevel, setPlayLevel] = useState(songEngine.playLevel || 1);
   const [hitFeedback, setHitFeedback] = useState(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -38,6 +39,8 @@ export default function SongHighway({
       } else if (eventType === 'tempoChange') {
         setEffectiveBpm(payload.bpm);
         setTempoMultiplier(payload.mult);
+      } else if (eventType === 'levelChange') {
+        setPlayLevel(payload.level);
       } else if (eventType === 'metronomeChange') {
         setIsMetronomeEnabled(payload.enabled);
       } else if (eventType === 'hit') {
@@ -57,6 +60,11 @@ export default function SongHighway({
 
     return () => unsubscribe();
   }, []);
+
+  const handleLevelChange = (lvl) => {
+    songEngine.setPlayLevel(lvl);
+    setPlayLevel(lvl);
+  };
 
   const handlePlayPause = () => {
     if (isPlaying) {
@@ -207,6 +215,41 @@ export default function SongHighway({
               <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', marginLeft: '4px' }}>
                 {effectiveBpm} BPM
               </span>
+            </div>
+
+            {/* Level Difficulty Selector */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '3px', background: 'rgba(0,0,0,0.35)', borderRadius: '7px', padding: '2px 3px' }}>
+              {[
+                { id: 1, label: '⭐ L1 Auto', title: 'Level 1: Auto-Chord (Strum sounds target chord regardless of fretting)' },
+                { id: 2, label: '🎯 L2 Assist', title: 'Level 2: Smart Assist (Plays chord if fingers are close enough)' },
+                { id: 3, label: '🔥 L3 Pro', title: 'Level 3: Pro (Realistic physics, exact fretting)' }
+              ].map(lvl => (
+                <button
+                  key={lvl.id}
+                  onClick={() => handleLevelChange(lvl.id)}
+                  title={lvl.title}
+                  style={{
+                    background: playLevel === lvl.id
+                      ? (lvl.id === 1 ? 'rgba(56, 189, 248, 0.28)' : lvl.id === 2 ? 'rgba(16, 185, 129, 0.28)' : 'rgba(245, 158, 11, 0.28)')
+                      : 'transparent',
+                    border: playLevel === lvl.id
+                      ? `1px solid ${lvl.id === 1 ? '#38bdf8' : lvl.id === 2 ? '#10b981' : '#f59e0b'}`
+                      : '1px solid transparent',
+                    color: playLevel === lvl.id
+                      ? (lvl.id === 1 ? '#38bdf8' : lvl.id === 2 ? '#34d399' : '#fbbf24')
+                      : 'var(--text-muted)',
+                    borderRadius: '5px',
+                    padding: '3px 8px',
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  {lvl.label}
+                </button>
+              ))}
             </div>
           </div>
 

@@ -10,6 +10,7 @@ export default function SongStudioPanel() {
   const [tempoMultiplier, setTempoMultiplier] = useState(songEngine.tempoMultiplier);
   const [backingVolume, setBackingVolume] = useState(songEngine.backingVolume);
   const [isMetronomeEnabled, setIsMetronomeEnabled] = useState(songEngine.isMetronomeEnabled);
+  const [playLevel, setPlayLevel] = useState(songEngine.playLevel || 1);
 
   useEffect(() => {
     const unsubscribe = songEngine.subscribe((eventType, payload) => {
@@ -21,6 +22,8 @@ export default function SongStudioPanel() {
       } else if (eventType === 'songChange') {
         setSong(payload.song);
         setEffectiveBpm(songEngine.effectiveBpm);
+      } else if (eventType === 'levelChange') {
+        setPlayLevel(payload.level);
       } else if (eventType === 'tempoChange') {
         setEffectiveBpm(payload.bpm);
         setTempoMultiplier(payload.mult);
@@ -31,6 +34,11 @@ export default function SongStudioPanel() {
 
     return () => unsubscribe();
   }, []);
+
+  const handleLevelChange = (lvl) => {
+    songEngine.setPlayLevel(lvl);
+    setPlayLevel(lvl);
+  };
 
   const handlePlayPause = () => {
     if (isPlaying) {
@@ -111,6 +119,62 @@ export default function SongStudioPanel() {
         <span style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: '1.4' }}>
           {song.description}
         </span>
+      </div>
+
+      {/* Difficulty Level Selector */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <label style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
+            DIFFICULTY LEVEL:
+          </label>
+          <span style={{ fontSize: '10px', color: playLevel === 1 ? '#38bdf8' : (playLevel === 2 ? '#34d399' : '#fbbf24'), fontFamily: 'var(--font-mono)' }}>
+            {playLevel === 1 && '⭐ Level 1: Rhythm Only'}
+            {playLevel === 2 && '🎯 Level 2: Smart Assist'}
+            {playLevel === 3 && '🔥 Level 3: Pro Realistic'}
+          </span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+          {[
+            { id: 1, title: '⭐ Level 1', desc: 'Auto-Chord' },
+            { id: 2, title: '🎯 Level 2', desc: 'Close Enough' },
+            { id: 3, title: '🔥 Level 3', desc: 'Pro Fretting' }
+          ].map(lvl => (
+            <button
+              key={lvl.id}
+              onClick={() => handleLevelChange(lvl.id)}
+              style={{
+                background: playLevel === lvl.id
+                  ? (lvl.id === 1 ? 'rgba(56, 189, 248, 0.22)' : lvl.id === 2 ? 'rgba(16, 185, 129, 0.22)' : 'rgba(245, 158, 11, 0.22)')
+                  : 'rgba(255, 255, 255, 0.04)',
+                border: `1px solid ${playLevel === lvl.id ? (lvl.id === 1 ? '#38bdf8' : lvl.id === 2 ? '#10b981' : '#f59e0b') : 'rgba(255, 255, 255, 0.12)'}`,
+                borderRadius: '8px',
+                padding: '8px 4px',
+                cursor: 'pointer',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '2px',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <span style={{
+                fontSize: '11px',
+                fontWeight: 'bold',
+                color: playLevel === lvl.id ? '#fff' : 'var(--text-secondary)',
+                fontFamily: 'var(--font-mono)'
+              }}>
+                {lvl.title}
+              </span>
+              <span style={{
+                fontSize: '9px',
+                color: playLevel === lvl.id ? (lvl.id === 1 ? '#38bdf8' : lvl.id === 2 ? '#34d399' : '#fbbf24') : 'var(--text-muted)',
+                fontFamily: 'var(--font-sans)'
+              }}>
+                {lvl.desc}
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Main Playback Buttons */}

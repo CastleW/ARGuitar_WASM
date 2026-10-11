@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings, Cpu, Music, Camera, SwitchCamera, Activity, Copy, Check, X } from 'lucide-react';
+import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings, Cpu, Music, Camera, SwitchCamera, Activity, Copy, Check, X, Award } from 'lucide-react';
 import { detectMarkers, DETECTOR_CONFIG } from '../utils/aruco_detector';
 import {
   getNeckGeometry,
@@ -19,7 +19,7 @@ import { guitarAudio } from '../utils/guitar_audio';
 import SongHighway from './SongHighway';
 import RecorderPanel from './RecorderPanel';
 import { SessionRecorder, saveRecordingFiles, buildFrameRecord } from '../utils/session_recorder';
-import { songEngine } from '../utils/song_engine';
+import { songEngine, getPlayableChordObject, isChordCloseEnough } from '../utils/song_engine';
 
 // Resolution presets for webcam capture
 const RESOLUTION_PRESETS = {
@@ -216,6 +216,26 @@ export default function ARCamera({
     strumModeRef.current = strumMode;
     localStorage.setItem('arguitar_strum_mode', strumMode);
   }, [strumMode]);
+
+  // Song Play-Along Level: 1 = Beginner (Auto-Chord), 2 = Intermediate (Assist / Close Enough), 3 = Pro (Realistic)
+  const [playLevel, setPlayLevel] = useState(() => {
+    return songEngine.playLevel || 1;
+  });
+  const playLevelRef = useRef(playLevel);
+  useEffect(() => {
+    playLevelRef.current = playLevel;
+    songEngine.setPlayLevel(playLevel);
+  }, [playLevel]);
+
+  // Sync playLevel with external songEngine events
+  useEffect(() => {
+    const unsubscribe = songEngine.subscribe((eventType, payload) => {
+      if (eventType === 'levelChange') {
+        setPlayLevel(payload.level);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   // Camera capture resolution: '720p' (default), '480p', '1080p'
   const [captureResolution, setCaptureResolution] = useState(() => {
@@ -1649,34 +1669,88 @@ export default function ARCamera({
               vibratingStringsRef.current[str] = timestamp;
             });
 
-            const chordPrefix = activeChord ? `${activeChord.name} ` : '';
-            const strumDesc = newlyCrossed.length >= 3 ? `${chordPrefix}STRUM ${dir}` : `${chordPrefix}PICK S:${displayCrossed.join(',')}`;
+            const currentFretted = {};
+            trackedFingers.forEach(f => {
+              if (f.isActive && f.string && f.fret) {
+                currentFretted[f.string] = f.fret;
+              }
+            });
+
+            const normalizedVelocity = Math.min(1.0, Math.max(0.38, Math.abs(velocityS) / 10));
+
+            // Difficulty Level Logic for Song Play-Along
+            const isSongActive = songEngine.isPlaying;
+            const targetChord = isSongActive ? songEngine.getTargetChord() : null;
+            const targetPlayable = targetChord ? getPlayableChordObject(targetChord) : null;
+            const currentLevel = playLevelRef.current || 1;
+
+            let chordToPlay = null;
+            let isAssistHit = false;
+            let displayTitle = '';
+            let displayColor = isDownstroke ? '#f59e0b' : '#06b6d4';
+
+            if (isSongActive && targetPlayable) {
+              if (currentLevel === 1) {
+                // LEVEL 1: AUTO-CHORD (Beginner)
+                // Always sound the target chord cleanly regardless of left-hand fretting!
+                chordToPlay = targetPlayable;
+                displayTitle = `⭐ ${targetPlayable.name} [L1 AUTO]`;
+                displayColor = '#38bdf8'; // bright sky cyan
+              } else if (currentLevel === 2) {
+                // LEVEL 2: SMART ASSIST / CLOSE ENOUGH (Intermediate)
+                const proximity = isChordCloseEnough(currentFretted, targetChord, activeChord);
+                if (proximity.isClose) {
+                  chordToPlay = targetPlayable;
+                  isAssistHit = true;
+                  displayTitle = `🎯 ${targetPlayable.name} [L2 ASSIST]`;
+                  displayColor = '#10b981'; // emerald
+                } else {
+                  // Not close enough: play whatever is fretted
+                  displayTitle = activeChord ? activeChord.name : `MISS (Need ${targetChord.short})`;
+                  displayColor = '#f87171'; // soft red
+                }
+              } else {
+                // LEVEL 3: PRO / REALISTIC
+                if (activeChord && newlyCrossed.length >= 3) {
+                  chordToPlay = activeChord;
+                }
+                displayTitle = activeChord ? `${activeChord.name} [L3 PRO]` : '';
+                displayColor = activeChord ? (activeChord.quality === 'major' ? '#10b981' : '#a855f7') : (isDownstroke ? '#f59e0b' : '#06b6d4');
+              }
+            } else {
+              // Free Play (no song playing): standard realistic or chord detection
+              if (activeChord && newlyCrossed.length >= 3) {
+                chordToPlay = activeChord;
+                displayTitle = activeChord.name;
+                displayColor = activeChord.quality === 'major' ? '#10b981' : '#a855f7';
+              }
+            }
+
+            const chordPrefix = displayTitle ? `${displayTitle} ` : '';
+            const strumDesc = (chordToPlay || newlyCrossed.length >= 3)
+              ? `${chordPrefix}STRUM ${dir}`
+              : `${chordPrefix}PICK S:${displayCrossed.join(',')}`;
 
             activeStrumDisplayRef.current = {
               text: `${strumDesc} [Strings ${displayCrossed.join(',')}]`,
               time: timestamp,
-              color: isDownstroke ? (activeChord ? (activeChord.quality === 'major' ? '#10b981' : '#a855f7') : '#f59e0b') : '#06b6d4',
-              chord: activeChord ? activeChord.name : null,
-              dir: dir
+              color: displayColor,
+              chord: chordToPlay ? chordToPlay.name : (activeChord ? activeChord.name : null),
+              dir: dir,
+              level: currentLevel,
+              isAssist: isAssistHit
             };
 
             if (audioEnabled) {
-              const currentFretted = {};
-              trackedFingers.forEach(f => {
-                if (f.isActive && f.string && f.fret) {
-                  currentFretted[f.string] = f.fret;
+              if (chordToPlay) {
+                guitarAudio.strumChord(chordToPlay, dir, normalizedVelocity);
+                if (isSongActive) {
+                  songEngine.evaluateStrum(targetChord.short, isAssistHit);
                 }
-              });
-
-              const normalizedVelocity = Math.min(1.0, Math.max(0.38, Math.abs(velocityS) / 10));
-
-              if (activeChord && newlyCrossed.length >= 3) {
-                guitarAudio.strumChord(activeChord, dir, normalizedVelocity);
-                songEngine.evaluateStrum(activeChord.short || activeChord.name);
               } else {
                 guitarAudio.strumStrings(newlyCrossed, currentFretted, dir, normalizedVelocity);
-                if (newlyCrossed.length >= 2) {
-                  songEngine.evaluateStrum(null);
+                if (isSongActive && newlyCrossed.length >= 2) {
+                  songEngine.evaluateStrum(activeChord?.short || null, false);
                 }
               }
             }
@@ -2042,12 +2116,13 @@ export default function ARCamera({
     } else if (timeSinceStrum < 750) {
       // Standalone Strum Banner if played without an identified chord
       const alpha = 1 - timeSinceStrum / 750;
+      const bannerColor = activeStrumDisplayRef.current.color || '#f59e0b';
       ctx.save();
-      ctx.shadowColor = '#f59e0b';
+      ctx.shadowColor = bannerColor;
       ctx.shadowBlur = 14;
       drawUnmirroredText(ctx, `⚡ ${activeStrumDisplayRef.current.text}`, width / 2, 45, {
         font: 'bold 15px monospace',
-        fillStyle: `rgba(245, 158, 11, ${alpha})`,
+        fillStyle: bannerColor,
         align: 'center',
         baseline: 'middle'
       });
@@ -3387,6 +3462,32 @@ export default function ARCamera({
                 {strumMode === 'smart' && '🎯 Smart Strum'}
                 {strumMode === 'down' && '⬇️ Down Only'}
                 {strumMode === 'both' && '⇅ Down & Up'}
+              </span>
+            </button>
+
+            {/* Play-Along Song Difficulty Level Button */}
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                const nextLevel = (playLevel % 3) + 1;
+                setPlayLevel(nextLevel);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 10px',
+                fontSize: '12px',
+                borderColor: playLevel === 1 ? '#38bdf8' : (playLevel === 2 ? '#10b981' : '#f59e0b')
+              }}
+              title="Click to cycle song play difficulty: Level 1 (Auto-Chord) -> Level 2 (Assist / Close Enough) -> Level 3 (Pro / Realistic)"
+            >
+              <Award size={14} color={playLevel === 1 ? '#38bdf8' : (playLevel === 2 ? '#10b981' : '#f59e0b')} />
+              <span style={{ fontFamily: 'var(--font-mono)' }}>
+                {playLevel === 1 && '⭐ L1: Auto'}
+                {playLevel === 2 && '🎯 L2: Assist'}
+                {playLevel === 3 && '🔥 L3: Pro'}
               </span>
             </button>
 
