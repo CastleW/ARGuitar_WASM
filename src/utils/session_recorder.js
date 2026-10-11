@@ -89,7 +89,8 @@ export function buildFrameRecord({
   neckGeometry,
   handCount,
   trackedFingers,
-  activeChord
+  activeChord,
+  strumMetrics
 }) {
   const rec = {
     type: 'frame',
@@ -169,6 +170,7 @@ export function buildFrameRecord({
     }));
   }
   if (activeChord) rec.chord = activeChord.name;
+  if (strumMetrics) rec.strum = strumMetrics;
 
   return rec;
 }

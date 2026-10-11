@@ -18,7 +18,7 @@ import { detectChordFromFingers, createChordSmoother } from '../utils/chord_dete
 import { guitarAudio } from '../utils/guitar_audio';
 import SongHighway from './SongHighway';
 import RecorderPanel from './RecorderPanel';
-import { SessionRecorder, saveRecordingFiles, buildFrameRecord } from '../utils/session_recorder';
+import { SessionRecorder, saveRecordingFiles, buildFrameRecord, round1, round3 } from '../utils/session_recorder';
 import { songEngine, getPlayableChordObject, isChordCloseEnough } from '../utils/song_engine';
 
 // Resolution presets for webcam capture
@@ -1315,6 +1315,7 @@ export default function ARCamera({
     // 3. Separate Fretting Hand (Left) and Strumming Hand (Right)
     let fretHandLandmarks = null;
     let strumHandLandmarks = null;
+    let recStrumMetrics = null;
 
     if (handLandmarks && handLandmarks.length > 0) {
       if (handLandmarks.length === 1) {
@@ -1469,8 +1470,9 @@ export default function ARCamera({
         const dyH = (strumHandLandmarks[9].y - strumHandLandmarks[0].y) * height;
         handSpanPx = Math.hypot(dxH, dyH);
         if (handSpanPx > 10) {
-          // Average adult wrist-to-middle MCP is ~9.5 cm. Camera focal length ~892px
-          zHand = (892 * 9.5) / handSpanPx;
+          // Average adult wrist-to-middle MCP is ~9.5 cm. Scale focal length to stream resolution:
+          const focalPx = 895.35 * (width / 640.0);
+          zHand = (focalPx * 9.5) / handSpanPx;
         }
       }
       const deltaZ = zGuitar - zHand;
@@ -1491,6 +1493,52 @@ export default function ARCamera({
       const mcpZ = (((strumHandLandmarks[5]?.z ?? 0) + (strumHandLandmarks[9]?.z ?? 0)) / 2);
       const relativeTipDepth = tipZ - mcpZ;
 
+      // ---- Smart Strum Guard: Multi-Layer Posture, Angle & Proximity Verification ----
+      // Layer 1: Wrist vector alignment along guitar neck (pointing from body towards headstock)
+      let handVecX = 0, handVecY = 0;
+      let cosWristAngle = 0.85;
+      let isWristAngleValid = true;
+      let isWristPositionValid = true;
+      let tWrist = 1.0;
+      let sWrist = 3.5;
+
+      if (strumHandLandmarks && strumHandLandmarks[0] && strumHandLandmarks[9]) {
+        const wristPt = strumHandLandmarks[0];
+        const mcpPt = strumHandLandmarks[9];
+        handVecX = (mcpPt.x - wristPt.x) * width;
+        handVecY = (mcpPt.y - wristPt.y) * height;
+        const handVecLen = Math.hypot(handVecX, handVecY) || 1;
+        const handUnitX = handVecX / handVecLen;
+        const handUnitY = handVecY / handVecLen;
+
+        // Vector along the guitar axis from Body towards Nut/Headstock:
+        const vBodyToNutX = -dx / len;
+        const vBodyToNutY = -dy / len;
+        // In natural guitar playing, the strumming forearm rests on the body and the hand points along the body toward the headstock:
+        cosWristAngle = (handUnitX * vBodyToNutX + handUnitY * vBodyToNutY);
+        // Valid strumming hand points along the guitar towards the headstock (cos >= 0.20):
+        isWristAngleValid = (cosWristAngle >= 0.20);
+
+        // Wrist anchor position in guitar space:
+        const wristPx = wristPt.x * width;
+        const wristPy = wristPt.y * height;
+        tWrist = ((wristPx - start.x) * dx + (wristPy - start.y) * dy) / (len * len);
+        const cxW = start.x + tWrist * dx;
+        const cyW = start.y + tWrist * dy;
+        const lateralDistW = (wristPx - cxW) * vPerp.x + (wristPy - cyW) * vPerp.y;
+        sWrist = ((lateralDistW / (stringSpread || 1)) + 0.5) * 5 + 1;
+
+        // In playing position, wrist is anchored over the body (t in [0.45, 2.30]):
+        isWristPositionValid = (tWrist >= 0.45 && tWrist <= 2.30);
+      }
+
+      // Hand is close enough to guitar if not pulled forward towards camera:
+      const isDistanceClose = (opticalScaleRatio <= 1.70);
+      const isStrumPostureValid = isWristAngleValid && isWristPositionValid;
+
+      // Master flag: Is the hand physically away from the guitar or in an obvious non-playing posture?
+      const isHandAway = (!isStrumPostureValid) || (!isDistanceClose);
+
       const se = strumEngineRef.current;
       const dt = se.lastTime > 0 ? Math.max(0.005, (timestamp - se.lastTime) / 1000) : 0.033;
       const deltaS = se.lastS !== null ? (sPick - se.lastS) : 0;
@@ -1504,8 +1552,8 @@ export default function ARCamera({
       const isUpstroke = deltaS > 0;
       const dir = isDownstroke ? 'DOWN ↓' : 'UP ↑';
 
-      // Update downstroke reference longitudinal position t when moving downward
-      if (isDownstroke && Math.abs(deltaS) >= 0.15 && Math.abs(velocityS) >= 2.0) {
+      // Update downstroke reference longitudinal position t when moving downward in playing posture
+      if (isDownstroke && !isHandAway && Math.abs(deltaS) >= 0.15 && Math.abs(velocityS) >= 2.0) {
         se.lastDownT = tPick;
         se.lastDownTime = timestamp;
       }
@@ -1517,11 +1565,11 @@ export default function ARCamera({
       // Signal A: 2D Elliptical Lateral/Longitudinal Hysteresis Arc (t offset relative to downstroke)
       if (se.lastDownT !== null && (timestamp - se.lastDownTime) < 1000) {
         const deltaT = tPick - se.lastDownT;
-        if (deltaT >= 0.065) {
+        if (deltaT >= 0.055) {
           arcScore += 1.4; // Hand arced toward bridge to bypass strings
-        } else if (deltaT >= 0.045) {
+        } else if (deltaT >= 0.035) {
           arcScore += 0.7;
-        } else if (deltaT <= 0.025) {
+        } else if (deltaT <= 0.020) {
           strikeScore += 1.2; // Hand tracked back along same string trajectory
         }
       }
@@ -1533,31 +1581,31 @@ export default function ARCamera({
         strikeScore += 0.9;
       }
 
-      // Signal C: Guitar Body Proximity (z distance & optical hand span)
-      if (deltaZ > 3.8 || opticalScaleRatio > 1.20) {
+      // Signal C: Optical hand scale relative to Marker 5
+      if (opticalScaleRatio > 1.35) {
         arcScore += 1.2;
-      } else if (deltaZ < 2.0 && opticalScaleRatio < 1.08) {
-        strikeScore += 1.1;
+      } else if (opticalScaleRatio < 1.15) {
+        strikeScore += 1.0;
       }
 
+      // Air Reset determination:
+      // Only applicable on upstrokes (downstrokes are always active strikes unless hand is away)
       let isAirReset = false;
-      if (isDownstroke) {
-        // Downstrokes are virtually always active strikes unless hand is pulled completely away
-        isAirReset = (deltaZ > 5.5);
-      } else {
-        // Upstrokes: classified as air reset if hysteresis arc or lift score dominates
-        isAirReset = (arcScore >= 1.2) || (arcScore > strikeScore + 0.3);
+      if (isUpstroke) {
+        isAirReset = (arcScore >= 1.2) && (arcScore > strikeScore + 0.3);
       }
       se.isAirReset = isAirReset;
+      se.isHandAway = isHandAway;
 
-      // Smooth visual strike plane indicator
-      se.smoothedInStrikePlane = se.smoothedInStrikePlane * 0.4 + (isAirReset ? 0 : 1) * 0.6;
+      // Strike Plane: Only active when hand is in strum zone, NOT away, and NOT in air reset
+      const inStrikePlane = inStrumZone && !isHandAway && !isAirReset;
+      se.smoothedInStrikePlane = se.smoothedInStrikePlane * 0.4 + (inStrikePlane ? 1 : 0) * 0.6;
       const visualInStrikePlane = (se.smoothedInStrikePlane >= 0.5);
 
-      // Draw Pick Cursor (with Depth & Air Reset Indicator)
+      // Draw Pick Cursor (with Depth, Angle & Air Reset Indicator)
       ctx.save();
       if (!visualInStrikePlane && inEnvelope) {
-        // Air Reset mode: cool slate-cyan dashed halo with arc indicator
+        // Hand is not in strike plane: draw dashed halo with specific reason tag
         ctx.strokeStyle = 'rgba(56, 189, 248, 0.75)';
         ctx.lineWidth = 1.8;
         ctx.setLineDash([4, 4]);
@@ -1570,8 +1618,15 @@ export default function ARCamera({
         ctx.arc(pickX, pickY, 5, 0, 2 * Math.PI);
         ctx.fill();
 
-        const liftCm = Math.max(0, deltaZ).toFixed(0);
-        drawUnmirroredText(ctx, `↷ AIR RESET (+${liftCm}cm)`, pickX, pickY - 18, {
+        let reasonLabel = '↷ AIR RESET';
+        if (!isWristAngleValid) {
+          reasonLabel = `↷ OFF-ANGLE (∡${cosWristAngle.toFixed(2)})`;
+        } else if (!isWristPositionValid) {
+          reasonLabel = `↷ OFF-BODY (t${tWrist.toFixed(2)})`;
+        } else if (!isDistanceClose) {
+          reasonLabel = `↷ AWAY (x${opticalScaleRatio.toFixed(1)})`;
+        }
+        drawUnmirroredText(ctx, reasonLabel, pickX, pickY - 18, {
           font: 'bold 10px monospace',
           fillStyle: 'rgba(56, 189, 248, 0.9)',
           align: 'center',
@@ -1606,6 +1661,36 @@ export default function ARCamera({
         });
       }
       ctx.restore();
+
+      if (inEnvelope) {
+        const telemetry = `Scale:${opticalScaleRatio.toFixed(2)} | ∡${cosWristAngle.toFixed(2)} | t:${tPick.toFixed(2)}`;
+        drawUnmirroredText(ctx, telemetry, pickX, pickY + 16, {
+          font: '9px monospace',
+          fillStyle: 'rgba(255, 255, 255, 0.75)',
+          align: 'center',
+          baseline: 'top'
+        });
+      }
+
+      recStrumMetrics = {
+        tPick: round3(tPick),
+        sPick: round3(sPick),
+        deltaS: round3(deltaS),
+        velS: round1(velocityS),
+        dir,
+        zGuitar: round1(zGuitar),
+        zHand: round1(zHand),
+        deltaZ: round1(deltaZ),
+        scaleRatio: round3(opticalScaleRatio),
+        cosWrist: round3(cosWristAngle),
+        tWrist: round3(tWrist),
+        sWrist: round3(sWrist),
+        distOk: isDistanceClose,
+        postureOk: isStrumPostureValid,
+        handAway: isHandAway,
+        airReset: isAirReset,
+        mode: strumModeRef.current
+      };
 
       // Continuous Sub-Frame Line Segment Crossing Detection
       if (se.lastS !== null && se.inEnvelope && inEnvelope) {
@@ -1652,14 +1737,23 @@ export default function ARCamera({
           // Strum mode authorization
           let allowStrum = true;
           if (strumModeRef.current === 'down') {
+            // Down-only mode: requires downstroke
             allowStrum = isDownstroke;
           } else if (strumModeRef.current === 'smart') {
-            // In smart mode: downstrokes play; upstrokes only play if in strike plane (not air reset)!
-            if (!isDownstroke && isAirReset) {
+            // Smart Guard:
+            // 1. Hand MUST NOT be far away from the guitar
+            // 2. On upstrokes, hand MUST NOT be in air return reset
+            if (isHandAway || (isUpstroke && isAirReset)) {
               allowStrum = false;
             }
           } else if (strumModeRef.current === 'both') {
+            // Down & Up mode: unconditional strumming
             allowStrum = true;
+          }
+
+          if (recStrumMetrics) {
+            recStrumMetrics.allowStrum = allowStrum;
+            recStrumMetrics.crossed = [...newlyCrossed];
           }
 
           const displayCrossed = isDownstroke ? [...newlyCrossed].sort((a, b) => b - a) : [...newlyCrossed].sort((a, b) => a - b);
@@ -2180,7 +2274,8 @@ export default function ARCamera({
           neckGeometry,
           handCount: handLandmarks ? handLandmarks.length : 0,
           trackedFingers,
-          activeChord
+          activeChord,
+          strumMetrics: recStrumMetrics
         }));
       } catch (e) {
         console.warn('[Recorder] Failed to log frame:', e);
