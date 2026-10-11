@@ -424,6 +424,23 @@ export default function ARCamera({
 
   // Strumming and picking tracking refs
   const lastStrumStateRef = useRef({ time: 0, s: null, inZone: false });
+  const strumEngineRef = useRef({
+    lastTime: 0,
+    lastS: null,
+    lastT: null,
+    lastX: null,
+    lastY: null,
+    inEnvelope: false,
+    currentDirection: null,
+    strokeStartTime: 0,
+    strokeSoundedStrings: new Set(),
+    lastStrokeCompleteTime: 0,
+    lastDownT: null,
+    lastDownTime: 0,
+    lastUpTime: 0,
+    isAirReset: false,
+    smoothedInStrikePlane: true
+  });
   const vibratingStringsRef = useRef({});
   const pickTrailRef = useRef([]);
   const activeStrumDisplayRef = useRef({ text: '', time: 0, color: '#f59e0b' });
@@ -1397,19 +1414,24 @@ export default function ARCamera({
         ctx.restore();
       }
 
-      // Project pick position onto guitar axis
-      const { start, dx, dy, len, perpX, perpY, nutNeckWidth, endNeckWidth } = neckGeometry;
+      // Project pick position onto guitar axis using perspective-aware perp vector
+      const { start, dx, dy, len, nutNeckWidth, endNeckWidth } = neckGeometry;
       const tPick = ((pickX - start.x) * dx + (pickY - start.y) * dy) / (len * len);
       const cx = start.x + tPick * dx;
       const cy = start.y + tPick * dy;
-      const lateralDist = (pickX - cx) * perpX + (pickY - cy) * perpY;
+      const vPerp = getPerpAt(tPick, neckGeometry);
+      const lateralDist = (pickX - cx) * vPerp.x + (pickY - cy) * vPerp.y;
       const localWidth = nutNeckWidth + tPick * (endNeckWidth - nutNeckWidth);
       const stringSpread = localWidth * 0.88;
       const sPick = ((lateralDist / (stringSpread || 1)) + 0.5) * 5 + 1; // 1.0 (High E) to 6.0 (Low E)
 
+      // Wide motion envelope: captures fast sweeps even when starting above String 6 or finishing below String 1
+      const inEnvelope = (tPick >= 0.76 && tPick <= 1.58 && sPick >= -0.8 && sPick <= 7.8);
+      // Core visual strum zone boundaries
       const inStrumZone = (tPick >= 0.88 && tPick <= 1.45 && sPick >= 0.2 && sPick <= 6.8);
 
-      // 3D Depth & Proximity Gate relative to Marker 5 / Guitar Body
+      // Multi-Modal Depth & Hand Signals:
+      // 1. Estimate 3D guitar body depth (Marker 5 or fallback)
       let zGuitar = 70.0;
       if (markerPoses && markerPoses[5] && markerPoses[5][2] > 15) {
         zGuitar = markerPoses[5][2];
@@ -1419,7 +1441,7 @@ export default function ARCamera({
         zGuitar = 70.0 / (neckGeometry.depthRatio || 1.0);
       }
 
-      // Hand apparent scale & depth from MediaPipe
+      // 2. Hand apparent physical distance via scale
       let zHand = zGuitar;
       let handSpanPx = 0;
       if (strumHandLandmarks && strumHandLandmarks[0] && strumHandLandmarks[9]) {
@@ -1431,11 +1453,9 @@ export default function ARCamera({
           zHand = (892 * 9.5) / handSpanPx;
         }
       }
-
-      // deltaZ > 0 means the hand is closer to camera than guitar body (lifted off strings)
       const deltaZ = zGuitar - zHand;
 
-      // Optical scale ratio relative to Marker 5 pixel width if visible
+      // 3. Optical scale ratio relative to Marker 5 pixel width if visible
       let opticalScaleRatio = 1.0;
       const m5 = markers[5];
       if (m5 && m5.corners && m5.corners.length >= 4 && handSpanPx > 10) {
@@ -1445,153 +1465,261 @@ export default function ARCamera({
         }
       }
 
-      // Hand is lifted if it is > 3.5 cm in front of the guitar body or optical scale expands by > 16%
-      const isHandLifted = deltaZ > 3.5 || opticalScaleRatio > 1.16;
-      const inStrikePlane = inStrumZone && !isHandLifted;
+      // 4. MediaPipe 3D Landmark relative Z (tip vs knuckles)
+      // Negative z relative to knuckles indicates fingertips curled/lifted toward camera away from guitar face
+      const tipZ = (((strumHandLandmarks[8]?.z ?? 0) + (strumHandLandmarks[4]?.z ?? 0)) / 2);
+      const mcpZ = (((strumHandLandmarks[5]?.z ?? 0) + (strumHandLandmarks[9]?.z ?? 0)) / 2);
+      const relativeTipDepth = tipZ - mcpZ;
 
-      // Draw Pick Cursor (with Depth & Lifted Air Indicator)
+      const se = strumEngineRef.current;
+      const dt = se.lastTime > 0 ? Math.max(0.005, (timestamp - se.lastTime) / 1000) : 0.033;
+      const deltaS = se.lastS !== null ? (sPick - se.lastS) : 0;
+      const velocityS = deltaS / dt; // strings per second
+
+      // Stroke direction:
+      // String 6 = Low E (top), String 1 = High E (bottom)
+      // Sweeping 6 -> 1 is downwards: deltaS < 0
+      // Sweeping 1 -> 6 is upwards: deltaS > 0
+      const isDownstroke = deltaS < 0;
+      const isUpstroke = deltaS > 0;
+      const dir = isDownstroke ? 'DOWN ↓' : 'UP ↑';
+
+      // Update downstroke reference longitudinal position t when moving downward
+      if (isDownstroke && Math.abs(deltaS) >= 0.15 && Math.abs(velocityS) >= 2.0) {
+        se.lastDownT = tPick;
+        se.lastDownTime = timestamp;
+      }
+
+      // Hybrid Strike Plane vs Air Reset Classifier:
+      let arcScore = 0;
+      let strikeScore = 0;
+
+      // Signal A: 2D Elliptical Lateral/Longitudinal Hysteresis Arc (t offset relative to downstroke)
+      if (se.lastDownT !== null && (timestamp - se.lastDownTime) < 1000) {
+        const deltaT = tPick - se.lastDownT;
+        if (deltaT >= 0.065) {
+          arcScore += 1.4; // Hand arced toward bridge to bypass strings
+        } else if (deltaT >= 0.045) {
+          arcScore += 0.7;
+        } else if (deltaT <= 0.025) {
+          strikeScore += 1.2; // Hand tracked back along same string trajectory
+        }
+      }
+
+      // Signal B: MediaPipe 3D Landmark Depth (fingertip lift relative to palm)
+      if (relativeTipDepth < -0.040) {
+        arcScore += 1.0;
+      } else if (relativeTipDepth > -0.015) {
+        strikeScore += 0.9;
+      }
+
+      // Signal C: Guitar Body Proximity (z distance & optical hand span)
+      if (deltaZ > 3.8 || opticalScaleRatio > 1.20) {
+        arcScore += 1.2;
+      } else if (deltaZ < 2.0 && opticalScaleRatio < 1.08) {
+        strikeScore += 1.1;
+      }
+
+      let isAirReset = false;
+      if (isDownstroke) {
+        // Downstrokes are virtually always active strikes unless hand is pulled completely away
+        isAirReset = (deltaZ > 5.5);
+      } else {
+        // Upstrokes: classified as air reset if hysteresis arc or lift score dominates
+        isAirReset = (arcScore >= 1.2) || (arcScore > strikeScore + 0.3);
+      }
+      se.isAirReset = isAirReset;
+
+      // Smooth visual strike plane indicator
+      se.smoothedInStrikePlane = se.smoothedInStrikePlane * 0.4 + (isAirReset ? 0 : 1) * 0.6;
+      const visualInStrikePlane = (se.smoothedInStrikePlane >= 0.5);
+
+      // Draw Pick Cursor (with Depth & Air Reset Indicator)
       ctx.save();
-      if (inStrumZone && isHandLifted) {
-        // Hand is lifted in air reset: draw subtle dashed ring
-        ctx.strokeStyle = 'rgba(148, 163, 184, 0.75)';
+      if (!visualInStrikePlane && inEnvelope) {
+        // Air Reset mode: cool slate-cyan dashed halo with arc indicator
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.75)';
         ctx.lineWidth = 1.8;
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
-        ctx.arc(pickX, pickY, 13, 0, 2 * Math.PI);
+        ctx.arc(pickX, pickY, 14, 0, 2 * Math.PI);
         ctx.stroke();
 
-        ctx.fillStyle = 'rgba(148, 163, 184, 0.4)';
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.35)';
         ctx.beginPath();
         ctx.arc(pickX, pickY, 5, 0, 2 * Math.PI);
         ctx.fill();
 
-        drawUnmirroredText(ctx, `↷ LIFTED (+${Math.max(0, deltaZ).toFixed(0)}cm)`, pickX, pickY - 18, {
+        const liftCm = Math.max(0, deltaZ).toFixed(0);
+        drawUnmirroredText(ctx, `↷ AIR RESET (+${liftCm}cm)`, pickX, pickY - 18, {
           font: 'bold 10px monospace',
-          fillStyle: 'rgba(148, 163, 184, 0.85)',
+          fillStyle: 'rgba(56, 189, 248, 0.9)',
           align: 'center',
           baseline: 'bottom'
         });
       } else {
-        // Hand is in strike plane (ready to strum)
-        ctx.shadowColor = inStrikePlane ? '#f59e0b' : 'rgba(255,255,255,0.4)';
-        ctx.shadowBlur = inStrikePlane ? 10 : 4;
-        ctx.fillStyle = inStrikePlane ? 'rgba(245, 158, 11, 0.95)' : 'rgba(255, 255, 255, 0.7)';
+        // Strike plane: glowing target
+        const isUpward = (velocityS > 1.5);
+        const strikeColor = isUpward ? '#10b981' : (inStrumZone ? '#f59e0b' : 'rgba(255, 255, 255, 0.7)');
+        const strikeShadow = isUpward ? '#10b981' : (inStrumZone ? '#f59e0b' : 'rgba(255, 255, 255, 0.4)');
+
+        ctx.shadowColor = strikeShadow;
+        ctx.shadowBlur = inEnvelope ? 10 : 4;
+        ctx.fillStyle = strikeColor;
         ctx.beginPath();
-        ctx.arc(pickX, pickY, inStrikePlane ? 8 : 5, 0, 2 * Math.PI);
+        ctx.arc(pickX, pickY, inStrumZone ? 8 : 5, 0, 2 * Math.PI);
         ctx.fill();
 
-        // Outer targeting crosshair
-        ctx.strokeStyle = inStrikePlane ? '#f59e0b' : 'rgba(255, 255, 255, 0.5)';
+        // Outer crosshair ring
+        ctx.strokeStyle = strikeColor;
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(pickX, pickY, inStrikePlane ? 14 : 9, 0, 2 * Math.PI);
+        ctx.arc(pickX, pickY, inStrumZone ? 15 : 9, 0, 2 * Math.PI);
         ctx.stroke();
 
-        const label = inStrikePlane ? '⚡ STRIKE' : 'R-HAND';
+        const label = isUpward ? '⚡ UP STRIKE' : (inStrumZone ? '⚡ DOWN STRIKE' : 'R-HAND');
         drawUnmirroredText(ctx, label, pickX, pickY - 18, {
           font: 'bold 11px monospace',
-          fillStyle: inStrikePlane ? '#f59e0b' : '#ffffff',
+          fillStyle: strikeColor,
           align: 'center',
           baseline: 'bottom'
         });
       }
       ctx.restore();
 
-      // Strumming / Crossing Detection
-      const lastState = lastStrumStateRef.current;
-      if (inStrumZone && lastState.inZone && lastState.s !== null) {
-        const deltaS = sPick - lastState.s;
-        const dt = (timestamp - lastState.time) / 1000;
-        const velocity = dt > 0 ? deltaS / dt : 0; // strings per second
+      // Continuous Sub-Frame Line Segment Crossing Detection
+      if (se.lastS !== null && se.inEnvelope && inEnvelope) {
+        const sFrom = se.lastS;
+        const sTo = sPick;
+        const tFrom = se.lastT;
+        const tTo = tPick;
+        const sMin = Math.min(sFrom, sTo);
+        const sMax = Math.max(sFrom, sTo);
 
-        if (Math.abs(deltaS) >= 0.35 && Math.abs(velocity) >= 3.0) {
-          const sMin = Math.min(lastState.s, sPick);
-          const sMax = Math.max(lastState.s, sPick);
-          const crossed = [];
-          for (let str = 1; str <= 6; str++) {
-            if (str >= Math.floor(sMin + 0.1) && str <= Math.ceil(sMax - 0.1)) {
-              crossed.push(str);
-            }
-          }
+        // Direction reversal detection
+        const currentStrokeDir = isDownstroke ? 'down' : 'up';
+        if (se.currentDirection !== currentStrokeDir) {
+          se.strokeSoundedStrings.clear();
+          se.currentDirection = currentStrokeDir;
+          se.strokeStartTime = timestamp;
+        } else if (timestamp - se.strokeStartTime > 280) {
+          se.strokeSoundedStrings.clear();
+          se.strokeStartTime = timestamp;
+        }
 
-          if (crossed.length > 0) {
-            // Guitar convention: String 6 = Low E (top), String 1 = High E (bottom)
-            // Downstroke sweeps downwards from String 6 to String 1: deltaS < 0
-            // Upstroke sweeps upwards from String 1 to String 6: deltaS > 0
-            const isDown = deltaS < 0;
-            const isUp = deltaS > 0;
-            const dir = isDown ? 'DOWN ↓' : 'UP ↑';
-            const displayCrossed = isDown ? [...crossed].sort((a, b) => b - a) : [...crossed].sort((a, b) => a - b);
-
-            // Hybrid Depth Gate & Strum Mode Filter:
-            let allowStrum = true;
-            if (strumModeRef.current === 'down') {
-              allowStrum = isDown; // 100% silent return strokes in down-only mode
-            } else if (strumModeRef.current === 'smart') {
-              // In smart mode: Downstrokes always play; Upstrokes only play if hand is in strike plane!
-              if (isUp && isHandLifted) {
-                allowStrum = false;
-              }
-            }
-
-            if (allowStrum) {
-              crossed.forEach(str => {
-                vibratingStringsRef.current[str] = timestamp;
-              });
-
-              const chordPrefix = activeChord ? `${activeChord.name} ` : '';
-              const strumDesc = crossed.length >= 3 ? `${chordPrefix}STRUM ${dir}` : `${chordPrefix}PICK S:${displayCrossed.join(',')}`;
-              activeStrumDisplayRef.current = {
-                text: `${strumDesc} [Strings ${displayCrossed.join(',')}]`,
-                time: timestamp,
-                color: activeChord ? (activeChord.quality === 'major' ? '#10b981' : '#a855f7') : '#f59e0b',
-                chord: activeChord ? activeChord.name : null
-              };
-
-              // Real-Time Guitar Audio Pluck / Strum Synthesis
-              if (audioEnabled) {
-                const currentFretted = {};
-                trackedFingers.forEach(f => {
-                  if (f.isActive && f.string && f.fret) {
-                    currentFretted[f.string] = f.fret;
-                  }
-                });
-
-                const normalizedVelocity = Math.min(1.0, Math.max(0.35, Math.abs(velocity) / 9));
-
-                if (activeChord && crossed.length >= 3) {
-                  guitarAudio.strumChord(activeChord, dir, normalizedVelocity);
-                  songEngine.evaluateStrum(activeChord.short || activeChord.name);
-                } else {
-                  guitarAudio.strumStrings(crossed, currentFretted, dir, normalizedVelocity);
-                  if (crossed.length >= 2) {
-                    songEngine.evaluateStrum(null);
-                  }
+        // Detect all string lines crossed by segment (sFrom, tFrom) -> (sTo, tTo)
+        const newlyCrossed = [];
+        for (let str = 1; str <= 6; str++) {
+          if (str >= Math.floor(sMin + 0.08) && str <= Math.ceil(sMax - 0.08)) {
+            const u = Math.abs(sTo - sFrom) > 1e-4 ? (str - sFrom) / (sTo - sFrom) : 0.5;
+            const tCross = tFrom + u * (tTo - tFrom);
+            if (tCross >= 0.80 && tCross <= 1.55) {
+              if (!se.strokeSoundedStrings.has(str)) {
+                // Per-string debounce (35ms) allows 16th notes at 160 BPM (~94ms) while preventing micro-jitter
+                const lastPluck = vibratingStringsRef.current[str] || 0;
+                if (timestamp - lastPluck >= 35) {
+                  newlyCrossed.push(str);
                 }
               }
-            } else {
-              // Strum suppressed (air return reset motion)
-              activeStrumDisplayRef.current = {
-                text: `↷ RESET (AIR) [Strings ${crossed.join(',')}]`,
-                time: timestamp,
-                color: 'rgba(148, 163, 184, 0.7)',
-                chord: null
-              };
             }
+          }
+        }
+
+        // Trigger strum if displacement and velocity qualify
+        if (newlyCrossed.length > 0 && Math.abs(deltaS) >= 0.20 && (Math.abs(velocityS) >= 2.2 || newlyCrossed.length >= 2)) {
+          newlyCrossed.forEach(str => se.strokeSoundedStrings.add(str));
+
+          // Strum mode authorization
+          let allowStrum = true;
+          if (strumModeRef.current === 'down') {
+            allowStrum = isDownstroke;
+          } else if (strumModeRef.current === 'smart') {
+            // In smart mode: downstrokes play; upstrokes only play if in strike plane (not air reset)!
+            if (!isDownstroke && isAirReset) {
+              allowStrum = false;
+            }
+          } else if (strumModeRef.current === 'both') {
+            allowStrum = true;
+          }
+
+          const displayCrossed = isDownstroke ? [...newlyCrossed].sort((a, b) => b - a) : [...newlyCrossed].sort((a, b) => a - b);
+
+          if (allowStrum) {
+            newlyCrossed.forEach(str => {
+              vibratingStringsRef.current[str] = timestamp;
+            });
+
+            const chordPrefix = activeChord ? `${activeChord.name} ` : '';
+            const strumDesc = newlyCrossed.length >= 3 ? `${chordPrefix}STRUM ${dir}` : `${chordPrefix}PICK S:${displayCrossed.join(',')}`;
+
+            activeStrumDisplayRef.current = {
+              text: `${strumDesc} [Strings ${displayCrossed.join(',')}]`,
+              time: timestamp,
+              color: isDownstroke ? (activeChord ? (activeChord.quality === 'major' ? '#10b981' : '#a855f7') : '#f59e0b') : '#06b6d4',
+              chord: activeChord ? activeChord.name : null,
+              dir: dir
+            };
+
+            if (audioEnabled) {
+              const currentFretted = {};
+              trackedFingers.forEach(f => {
+                if (f.isActive && f.string && f.fret) {
+                  currentFretted[f.string] = f.fret;
+                }
+              });
+
+              const normalizedVelocity = Math.min(1.0, Math.max(0.38, Math.abs(velocityS) / 10));
+
+              if (activeChord && newlyCrossed.length >= 3) {
+                guitarAudio.strumChord(activeChord, dir, normalizedVelocity);
+                songEngine.evaluateStrum(activeChord.short || activeChord.name);
+              } else {
+                guitarAudio.strumStrings(newlyCrossed, currentFretted, dir, normalizedVelocity);
+                if (newlyCrossed.length >= 2) {
+                  songEngine.evaluateStrum(null);
+                }
+              }
+            }
+          } else {
+            // Muted return stroke (air reset)
+            activeStrumDisplayRef.current = {
+              text: `↷ AIR RESET (Muted) [Strings ${displayCrossed.join(',')}]`,
+              time: timestamp,
+              color: 'rgba(148, 163, 184, 0.75)',
+              chord: null,
+              dir: 'AIR'
+            };
           }
         }
       }
 
+      // Update tracking state for next frame
+      se.lastTime = timestamp;
+      se.lastS = sPick;
+      se.lastT = tPick;
+      se.lastX = pickX;
+      se.lastY = pickY;
+      se.inEnvelope = inEnvelope;
+
+      // Update legacy state ref
       lastStrumStateRef.current = {
         time: timestamp,
         s: sPick,
         inZone: inStrumZone
       };
 
-      if (inStrumZone) {
-        strumStatusDesc = `Pick @ Str ${sPick.toFixed(1)} [${isHandLifted ? 'LIFTED' : 'STRIKE'}]`;
+      if (inEnvelope) {
+        const modeBadge = strumModeRef.current === 'smart' ? 'SMART' : (strumModeRef.current === 'down' ? 'DOWN' : 'ALL');
+        const planeState = isAirReset ? 'AIR' : (isDownstroke ? 'DOWN' : 'UP');
+        strumStatusDesc = `Pick @ S${sPick.toFixed(1)} [${planeState}] (${modeBadge})`;
       }
     } else {
+      const se = strumEngineRef.current;
+      se.lastTime = timestamp;
+      se.lastS = null;
+      se.lastT = null;
+      se.inEnvelope = false;
+      se.strokeSoundedStrings.clear();
       lastStrumStateRef.current = { time: timestamp, s: null, inZone: false };
       pickTrailRef.current = [];
     }
@@ -2317,7 +2445,7 @@ export default function ARCamera({
     const hudX = 16;
     const hudY = 65;
     const hudW = 285;
-    const hudH = geometry?.debug ? 135 : 65;
+    const hudH = geometry?.debug ? 152 : 75;
 
     ctx.save();
     ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
@@ -2390,6 +2518,17 @@ export default function ARCamera({
       drawUnmirroredText(ctx, `Axis Angle: ${deg}° | Len: ${Math.round(geometry.len)}px`, hudX + 12, hudY + 110, {
         font: '10px monospace',
         fillStyle: 'rgba(255, 255, 255, 0.75)',
+        align: 'left',
+        baseline: 'top'
+      });
+
+      const se = strumEngineRef.current;
+      const strumTelemetry = se.lastS !== null
+        ? `Pick: S${se.lastS.toFixed(1)} (t=${se.lastT.toFixed(2)}) [${se.isAirReset ? 'AIR RESET ↷' : 'STRIKE ⚡'}]`
+        : 'Pick: Hand outside zone';
+      drawUnmirroredText(ctx, strumTelemetry, hudX + 12, hudY + 126, {
+        font: '10px monospace',
+        fillStyle: se.lastS !== null ? (se.isAirReset ? '#38bdf8' : '#f59e0b') : 'rgba(255, 255, 255, 0.55)',
         align: 'left',
         baseline: 'top'
       });
@@ -3241,11 +3380,11 @@ export default function ARCamera({
                 fontSize: '12px',
                 borderColor: strumMode === 'smart' ? '#06b6d4' : (strumMode === 'down' ? '#f59e0b' : '#a855f7')
               }}
-              title="Click to cycle strum mode: Smart Depth -> Down Only -> Down & Up"
+              title="Click to cycle strum mode: Smart Strum (Play upstrokes, mute air returns) -> Down Only -> Down & Up"
             >
               <Compass size={14} color={strumMode === 'smart' ? '#06b6d4' : (strumMode === 'down' ? '#f59e0b' : '#a855f7')} />
               <span style={{ fontFamily: 'var(--font-mono)' }}>
-                {strumMode === 'smart' && '🎯 Smart Depth'}
+                {strumMode === 'smart' && '🎯 Smart Strum'}
                 {strumMode === 'down' && '⬇️ Down Only'}
                 {strumMode === 'both' && '⇅ Down & Up'}
               </span>
