@@ -15,7 +15,7 @@ import {
   DEFAULT_DIST_COEF
 } from '../utils/guitar_math';
 import { detectChordFromFingers, createChordSmoother } from '../utils/chord_detector';
-import { guitarAudio } from '../utils/guitar_audio';
+import { guitarAudio, GUITAR_INSTRUMENTS } from '../utils/guitar_audio';
 import SongHighway from './SongHighway';
 import RecorderPanel from './RecorderPanel';
 import { SessionRecorder, saveRecordingFiles, buildFrameRecord, round1, round3 } from '../utils/session_recorder';
@@ -236,6 +236,15 @@ export default function ARCamera({
     });
     return () => unsubscribe();
   }, []);
+
+  // Guitar Sound Instrument: 'acoustic', 'electric_clean', 'distortion'
+  const [guitarInstrument, setGuitarInstrument] = useState(() => {
+    return guitarAudio.currentInstrument || 'acoustic';
+  });
+  const handleInstrumentChange = async (instId) => {
+    setGuitarInstrument(instId);
+    await guitarAudio.setInstrument(instId);
+  };
 
   // Camera capture resolution: '720p' (default), '480p', '1080p'
   const [captureResolution, setCaptureResolution] = useState(() => {
@@ -3251,6 +3260,43 @@ export default function ARCamera({
                 )}
               </div>
 
+              {/* Guitar Tone / Instrument Selector */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                color: 'var(--text-secondary)',
+                fontSize: '12px',
+                fontFamily: 'var(--font-mono)',
+                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+                paddingLeft: '10px'
+              }}>
+                <span style={{ whiteSpace: 'nowrap' }}>Tone:</span>
+                <select
+                  value={guitarInstrument}
+                  onChange={(e) => handleInstrumentChange(e.target.value)}
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.08)',
+                    border: `1px solid ${GUITAR_INSTRUMENTS[guitarInstrument]?.color || 'rgba(255, 255, 255, 0.2)'}`,
+                    borderRadius: '6px',
+                    color: GUITAR_INSTRUMENTS[guitarInstrument]?.color || 'var(--text-primary)',
+                    padding: '4px 6px',
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    cursor: 'pointer',
+                    outline: 'none',
+                    fontWeight: 600
+                  }}
+                  title="Choose Guitar Sound (Acoustic vs Electric Clean vs Electric Rock)"
+                >
+                  {Object.entries(GUITAR_INSTRUMENTS).map(([key, inst]) => (
+                    <option key={key} value={key} style={{ background: '#0f172a', color: inst.color }}>
+                      {inst.icon} {inst.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {/* Neck Width Calibrator */}
               <div style={{
                 display: 'flex',
@@ -3531,6 +3577,31 @@ export default function ARCamera({
             >
               {audioEnabled ? <Volume2 size={15} color="var(--accent-cyan)" /> : <VolumeX size={15} color="var(--text-secondary)" />}
               <span style={{ fontFamily: 'var(--font-mono)' }}>{audioEnabled ? 'Sound ON' : 'Muted'}</span>
+            </button>
+
+            {/* Guitar Sound Model / Instrument Cycle Button */}
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                const instKeys = Object.keys(GUITAR_INSTRUMENTS);
+                const nextIdx = (instKeys.indexOf(guitarInstrument) + 1) % instKeys.length;
+                handleInstrumentChange(instKeys[nextIdx]);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 10px',
+                fontSize: '12px',
+                borderColor: GUITAR_INSTRUMENTS[guitarInstrument]?.color || 'var(--accent-cyan)'
+              }}
+              title={`Guitar Tone: ${GUITAR_INSTRUMENTS[guitarInstrument]?.name} (Click to switch to Electric / Acoustic)`}
+            >
+              <span>{GUITAR_INSTRUMENTS[guitarInstrument]?.icon || '🎸'}</span>
+              <span style={{ fontFamily: 'var(--font-mono)', color: GUITAR_INSTRUMENTS[guitarInstrument]?.color }}>
+                {GUITAR_INSTRUMENTS[guitarInstrument]?.badge || 'Acoustic'}
+              </span>
             </button>
 
             {/* Strum Mode Cycle Button */}

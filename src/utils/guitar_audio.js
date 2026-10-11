@@ -41,24 +41,71 @@ function dataURIToArrayBuffer(dataURI) {
   return bytes.buffer;
 }
 
+export const GUITAR_INSTRUMENTS = {
+  acoustic: {
+    id: 'acoustic',
+    name: 'Acoustic Steel',
+    icon: '🎸',
+    file: 'acoustic_guitar_steel-mp3.js',
+    key: 'acoustic_guitar_steel',
+    badge: 'Acoustic Steel',
+    color: '#f59e0b',
+    eq: { lowFreq: 140, lowGain: 3.5, midFreq: 1200, midGain: 1.5, highFreq: 6500, highGain: -3.0 }
+  },
+  electric_clean: {
+    id: 'electric_clean',
+    name: 'Electric Clean',
+    icon: '⚡',
+    file: 'electric_guitar_clean-mp3.js',
+    key: 'electric_guitar_clean',
+    badge: 'Electric Clean',
+    color: '#06b6d4',
+    eq: { lowFreq: 110, lowGain: 1.5, midFreq: 2600, midGain: 3.5, highFreq: 7500, highGain: 1.0 }
+  },
+  distortion: {
+    id: 'distortion',
+    name: 'Electric Rock',
+    icon: '🔥',
+    file: 'distortion_guitar-mp3.js',
+    key: 'distortion_guitar',
+    badge: 'Electric Rock',
+    color: '#ef4444',
+    eq: { lowFreq: 180, lowGain: 4.0, midFreq: 1600, midGain: 4.5, highFreq: 5000, highGain: -4.0 }
+  }
+};
+
 class GuitarAudioEngine {
   constructor() {
     this.ctx = null;
     this.masterGain = null;
+    this.bodyLow = null;
+    this.bodyMid = null;
+    this.bodyHigh = null;
     this.reverbNode = null;
     this.isMuted = false;
     this.volume = 0.85;
 
-    this.soundfontLoaded = false;
-    this.soundfontLoading = false;
-    this.soundfontData = null;
-    this.sampleCache = new Map(); // noteName -> AudioBuffer
-    this.activeVoices = new Map(); // stringNum -> active nodes
-    this.audioInitPromise = null;
+    let savedInst = 'acoustic';
+    try {
+      savedInst = localStorage.getItem('arguitar_instrument') || 'acoustic';
+    } catch {
+      // ignore
+    }
+    this.currentInstrument = GUITAR_INSTRUMENTS[savedInst] ? savedInst : 'acoustic';
+
+    this.sampleCaches = {
+      acoustic: new Map(),
+      electric_clean: new Map(),
+      distortion: new Map()
+    };
+    this.loadedInstruments = new Set();
+    this.loadingInstruments = new Set();
+    this.loadingPromises = new Map();
+    this.onInstrumentChange = null;
   }
 
   /**
-   * Initialize or resume browser AudioContext & load soundfont
+   * Initialize or resume browser AudioContext & load current soundfont
    */
   async ensureAudioContext() {
     if (!this.ctx) {
@@ -73,32 +120,25 @@ class GuitarAudioEngine {
       this.masterGain = this.ctx.createGain();
       this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : this.volume, this.ctx.currentTime);
 
-      // Acoustic Body Resonance EQ:
-      // Low warmth around 140Hz
-      const bodyLow = this.ctx.createBiquadFilter();
-      bodyLow.type = 'peaking';
-      bodyLow.frequency.setValueAtTime(140, this.ctx.currentTime);
-      bodyLow.Q.setValueAtTime(1.4, this.ctx.currentTime);
-      bodyLow.gain.setValueAtTime(3.5, this.ctx.currentTime);
+      // Body Resonance & Amp EQ Chain:
+      this.bodyLow = this.ctx.createBiquadFilter();
+      this.bodyLow.type = 'peaking';
+      this.bodyLow.Q.setValueAtTime(1.4, this.ctx.currentTime);
 
-      // Mid presence around 1200Hz
-      const bodyMid = this.ctx.createBiquadFilter();
-      bodyMid.type = 'peaking';
-      bodyMid.frequency.setValueAtTime(1200, this.ctx.currentTime);
-      bodyMid.Q.setValueAtTime(1.0, this.ctx.currentTime);
-      bodyMid.gain.setValueAtTime(1.5, this.ctx.currentTime);
+      this.bodyMid = this.ctx.createBiquadFilter();
+      this.bodyMid.type = 'peaking';
+      this.bodyMid.Q.setValueAtTime(1.0, this.ctx.currentTime);
 
-      // Gentle high-shelf to soften harsh digital transients
-      const bodyHigh = this.ctx.createBiquadFilter();
-      bodyHigh.type = 'highshelf';
-      bodyHigh.frequency.setValueAtTime(6500, this.ctx.currentTime);
-      bodyHigh.gain.setValueAtTime(-3.0, this.ctx.currentTime);
+      this.bodyHigh = this.ctx.createBiquadFilter();
+      this.bodyHigh.type = 'highshelf';
+
+      this.applyInstrumentEQ(this.currentInstrument);
 
       // Connect EQ chain: masterGain -> bodyLow -> bodyMid -> bodyHigh -> destination
-      this.masterGain.connect(bodyLow);
-      bodyLow.connect(bodyMid);
-      bodyMid.connect(bodyHigh);
-      bodyHigh.connect(this.ctx.destination);
+      this.masterGain.connect(this.bodyLow);
+      this.bodyLow.connect(this.bodyMid);
+      this.bodyMid.connect(this.bodyHigh);
+      this.bodyHigh.connect(this.ctx.destination);
     }
 
     if (this.ctx.state === 'suspended') {
@@ -109,59 +149,96 @@ class GuitarAudioEngine {
       }
     }
 
-    // Trigger Soundfont loading in background
-    if (!this.soundfontLoaded && !this.soundfontLoading) {
-      this.loadSoundfont();
+    // Trigger loading of current instrument soundfont in background
+    if (!this.loadedInstruments.has(this.currentInstrument)) {
+      this.loadInstrumentSoundfont(this.currentInstrument);
     }
 
     return this.ctx.state === 'running';
   }
 
   /**
-   * Load local studio acoustic guitar soundfont from /soundfonts/
+   * Apply instrument-specific frequency shaping and tone profile
    */
-  async loadSoundfont() {
-    if (this.soundfontLoaded || this.soundfontLoading) return;
-    this.soundfontLoading = true;
+  applyInstrumentEQ(instrumentId) {
+    if (!this.ctx || !this.bodyLow || !this.bodyMid || !this.bodyHigh) return;
+    const inst = GUITAR_INSTRUMENTS[instrumentId] || GUITAR_INSTRUMENTS.acoustic;
+    const eq = inst.eq;
+    const now = this.ctx.currentTime;
+    this.bodyLow.frequency.setTargetAtTime(eq.lowFreq, now, 0.05);
+    this.bodyLow.gain.setTargetAtTime(eq.lowGain, now, 0.05);
+    this.bodyMid.frequency.setTargetAtTime(eq.midFreq, now, 0.05);
+    this.bodyMid.gain.setTargetAtTime(eq.midGain, now, 0.05);
+    this.bodyHigh.frequency.setTargetAtTime(eq.highFreq, now, 0.05);
+    this.bodyHigh.gain.setTargetAtTime(eq.highGain, now, 0.05);
+  }
 
+  /**
+   * Switch the active guitar instrument (acoustic, electric_clean, distortion)
+   */
+  async setInstrument(instrumentId) {
+    if (!GUITAR_INSTRUMENTS[instrumentId]) return;
+    this.currentInstrument = instrumentId;
     try {
-      // Check if global soundfont is already loaded on window
-      if (window.MIDI && window.MIDI.Soundfont && window.MIDI.Soundfont.acoustic_guitar_steel) {
-        this.soundfontData = window.MIDI.Soundfont.acoustic_guitar_steel;
-        this.soundfontLoaded = true;
-        this.preloadCommonGuitarNotes();
-        return;
-      }
-
-      // Load soundfont script dynamically from /soundfonts/
-      await new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = '/soundfonts/acoustic_guitar_steel-mp3.js';
-        script.async = true;
-        script.onload = () => resolve();
-        script.onerror = (e) => reject(e);
-        document.head.appendChild(script);
-      });
-
-      if (window.MIDI && window.MIDI.Soundfont && window.MIDI.Soundfont.acoustic_guitar_steel) {
-        this.soundfontData = window.MIDI.Soundfont.acoustic_guitar_steel;
-        this.soundfontLoaded = true;
-        console.log('🎸 Studio Acoustic Guitar SoundFont Loaded Successfully!');
-        this.preloadCommonGuitarNotes();
-      }
-    } catch (err) {
-      console.warn('Soundfont load fallback to physical model:', err);
-    } finally {
-      this.soundfontLoading = false;
+      localStorage.setItem('arguitar_instrument', instrumentId);
+    } catch {
+      // ignore
     }
+    this.applyInstrumentEQ(instrumentId);
+    await this.ensureAudioContext();
+    await this.loadInstrumentSoundfont(instrumentId);
+    if (this.onInstrumentChange) {
+      this.onInstrumentChange(instrumentId);
+    }
+  }
+
+  /**
+   * Load local studio soundfont for specified instrument from /soundfonts/
+   */
+  async loadInstrumentSoundfont(instrumentId) {
+    const inst = GUITAR_INSTRUMENTS[instrumentId] || GUITAR_INSTRUMENTS.acoustic;
+    if (this.loadedInstruments.has(inst.id)) return;
+    if (this.loadingInstruments.has(inst.id)) return this.loadingPromises.get(inst.id);
+
+    this.loadingInstruments.add(inst.id);
+    const loadPromise = (async () => {
+      try {
+        if (!window.MIDI?.Soundfont?.[inst.key]) {
+          await new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = `/soundfonts/${inst.file}`;
+            script.async = true;
+            script.onload = () => resolve();
+            script.onerror = (e) => reject(e);
+            document.head.appendChild(script);
+          });
+        }
+
+        if (window.MIDI?.Soundfont?.[inst.key]) {
+          this.loadedInstruments.add(inst.id);
+          console.log(`🎸 ${inst.name} SoundFont Loaded Successfully!`);
+          await this.preloadCommonNotes(inst.id);
+        }
+      } catch (err) {
+        console.warn(`Soundfont load fallback for ${inst.name}:`, err);
+      } finally {
+        this.loadingInstruments.delete(inst.id);
+      }
+    })();
+
+    this.loadingPromises.set(inst.id, loadPromise);
+    await loadPromise;
   }
 
   /**
    * Pre-decode common guitar notes so first plucks have 0ms latency
    */
-  async preloadCommonGuitarNotes() {
-    if (!this.soundfontData || !this.ctx) return;
-    // Common open and fretted notes for open chords (E2 to G4)
+  async preloadCommonNotes(instrumentId) {
+    const inst = GUITAR_INSTRUMENTS[instrumentId] || GUITAR_INSTRUMENTS.acoustic;
+    const sfData = window.MIDI?.Soundfont?.[inst.key];
+    if (!sfData || !this.ctx) return;
+    const cache = this.sampleCaches[inst.id] || (this.sampleCaches[inst.id] = new Map());
+
     const priorityMidis = [
       40, 41, 43, // E2, F2, G2 (Low E string)
       45, 47, 48, // A2, B2, C3 (A string)
@@ -173,11 +250,11 @@ class GuitarAudioEngine {
 
     for (const midi of priorityMidis) {
       const noteName = midiToNoteName(midi);
-      if (!this.sampleCache.has(noteName) && this.soundfontData[noteName]) {
+      if (!cache.has(noteName) && sfData[noteName]) {
         try {
-          const buffer = await this.decodeSoundfontNote(noteName);
+          const buffer = await this.decodeSoundfontNote(inst.id, noteName, sfData[noteName]);
           if (buffer) {
-            this.sampleCache.set(noteName, buffer);
+            cache.set(noteName, buffer);
           }
         } catch {
           // ignore
@@ -187,20 +264,19 @@ class GuitarAudioEngine {
   }
 
   /**
-   * Decode an mp3 base64 note from the soundfont into an AudioBuffer
+   * Decode an mp3 base64 note from soundfont into an AudioBuffer
    */
-  async decodeSoundfontNote(noteName) {
-    if (this.sampleCache.has(noteName)) {
-      return this.sampleCache.get(noteName);
+  async decodeSoundfontNote(instrumentId, noteName, dataUri) {
+    const cache = this.sampleCaches[instrumentId] || (this.sampleCaches[instrumentId] = new Map());
+    if (cache.has(noteName)) {
+      return cache.get(noteName);
     }
-    if (!this.soundfontData || !this.soundfontData[noteName] || !this.ctx) {
-      return null;
-    }
+    if (!dataUri || !this.ctx) return null;
 
     try {
-      const arrayBuffer = dataURIToArrayBuffer(this.soundfontData[noteName]);
+      const arrayBuffer = dataURIToArrayBuffer(dataUri);
       const audioBuffer = await this.ctx.decodeAudioData(arrayBuffer);
-      this.sampleCache.set(noteName, audioBuffer);
+      cache.set(noteName, audioBuffer);
       return audioBuffer;
     } catch (err) {
       console.warn(`Failed to decode note ${noteName}:`, err);
@@ -229,16 +305,23 @@ class GuitarAudioEngine {
   }
 
   /**
-   * Play a real studio-recorded acoustic guitar note
+   * Play a real studio-recorded guitar sample
    */
-  playSampleNote(audioBuffer, velocity, now) {
+  playSampleNote(audioBuffer, velocity, now, instrumentId = 'acoustic') {
     const source = this.ctx.createBufferSource();
     source.buffer = audioBuffer;
 
     const voiceGain = this.ctx.createGain();
     const clampedVelocity = Math.max(0.25, Math.min(1.0, velocity));
-    // Warm, dynamic acoustic guitar curve
-    const peakVolume = clampedVelocity * 0.95;
+
+    // Dynamic curve tuned per guitar sound
+    let peakVolume = clampedVelocity * 0.95;
+    if (instrumentId === 'electric_clean') {
+      peakVolume = clampedVelocity * 1.05;
+    } else if (instrumentId === 'distortion') {
+      peakVolume = clampedVelocity * 0.85; // higher harmonic density, lower peak to avoid clipping
+    }
+
     voiceGain.gain.setValueAtTime(peakVolume, now);
 
     source.connect(voiceGain);
@@ -322,17 +405,24 @@ class GuitarAudioEngine {
     const freq = midiToFrequency(noteMidi);
     const now = this.ctx.currentTime + startTimeOffsetSec;
 
-    // Check if we already have the real studio sample in cache
-    let audioBuffer = this.sampleCache.get(noteName);
+    const instId = this.currentInstrument;
+    const inst = GUITAR_INSTRUMENTS[instId] || GUITAR_INSTRUMENTS.acoustic;
+    const cache = this.sampleCaches[instId] || (this.sampleCaches[instId] = new Map());
 
-    if (!audioBuffer && this.soundfontData && this.soundfontData[noteName]) {
-      // Decode asynchronously and cache
-      audioBuffer = await this.decodeSoundfontNote(noteName);
+    // Check if we already have the real studio sample in cache for this instrument
+    let audioBuffer = cache.get(noteName);
+
+    if (!audioBuffer) {
+      const sfData = window.MIDI?.Soundfont?.[inst.key];
+      if (sfData && sfData[noteName]) {
+        // Decode asynchronously and cache
+        audioBuffer = await this.decodeSoundfontNote(instId, noteName, sfData[noteName]);
+      }
     }
 
     if (audioBuffer) {
-      // Play real studio-recorded acoustic guitar note
-      this.playSampleNote(audioBuffer, velocity, now);
+      // Play real studio-recorded guitar note
+      this.playSampleNote(audioBuffer, velocity, now, instId);
     } else {
       // Warm physical modeling fallback
       this.playSynthesizedNote(freq, velocity, now, stringNum);
