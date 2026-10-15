@@ -12,6 +12,9 @@ Level 3 - as with a real guitar, you need to make the real fret shapes.  The tra
 
 You'll need to print out the PDF file and make your own AR Guitar to use with the app.
 
+The App is deployed to: https://ar-guitar-wasm.vercel.app/
+
+
 - **True AR Experience**: Place augmented reality guitar fret markers directly on your physical guitar neck using your webcam
 - **Marker-Based Detection**: Use ArUco markers on the fretboard and headstock for precise positioning and tracking
 - **AI Chord Recognition**: AI analyzes marker positions to identify chord shapes and finger placements
