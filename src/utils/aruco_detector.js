@@ -136,14 +136,17 @@ export function detectMarkers(cv, src, options = {}) {
                 candidateDetails.push(detail);
               }
 
-              // Skip redundant bit-extraction if center is within 14px of an already-decoded marker
+              // Skip redundant bit-extraction if center is within 14px of an already-decoded marker,
+              // unless this quad is clearly larger. With large markers the adaptive threshold produces a
+              // band along the black border whose INNER contour (several px inside the true edge) can be
+              // decoded first; the outer contour must win or the corners (and pose distance) are biased.
               const candCx = (sorted[0].x + sorted[2].x) / 2;
               const candCy = (sorted[0].y + sorted[2].y) / 2;
-              const alreadyDecoded = detectedMarkers.some(m => {
+              const nearby = detectedMarkers.find(m => {
                 const distSq = (m.center.x - candCx) ** 2 + (m.center.y - candCy) ** 2;
                 return distSq < 196; // 14px radius
               });
-              if (alreadyDecoded) {
+              if (nearby && area <= nearby.area * 1.03) {
                 if (detail) detail.res = 'dup';
                 continue;
               }
@@ -304,11 +307,15 @@ export function detectMarkers(cv, src, options = {}) {
                     if (canDecode) {
                       matchedId = bestId;
                       matchedRot = bestRot;
+                      // Dictionary rotation r is the pattern rotated r x 90°; the canonical top-left
+                      // corner is therefore at sorted index (4 - r) % 4 (verified against rendered boards
+                      // at 0/90/180/270°: the previous `sorted[r]` was wrong for 90° and 270°).
+                      const r0 = (4 - matchedRot) % 4;
                       actualCorners = [
-                        sorted[matchedRot],
-                        sorted[(matchedRot + 1) % 4],
-                        sorted[(matchedRot + 2) % 4],
-                        sorted[(matchedRot + 3) % 4]
+                        sorted[r0],
+                        sorted[(r0 + 1) % 4],
+                        sorted[(r0 + 2) % 4],
+                        sorted[(r0 + 3) % 4]
                       ];
                       cx = (actualCorners[0].x + actualCorners[2].x) / 2;
                       cy = (actualCorners[0].y + actualCorners[2].y) / 2;
@@ -339,12 +346,20 @@ export function detectMarkers(cv, src, options = {}) {
                       id: matchedId,
                       corners: actualCorners,
                       center: { x: cx, y: cy },
+                      area,
                       strategy: selectedMethod,
                       blockSize
                     });
                     if (shouldLog) {
                       console.log(`[ArUco Debug] Success! Decoded ID ${matchedId} using strategy ${selectedMethod}`);
                     }
+                  } else if (nearby && nearby.id === matchedId && area > nearby.area) {
+                    // Larger concentric quad of the same marker: use its (outer) corners
+                    nearby.corners = actualCorners;
+                    nearby.center = { x: cx, y: cy };
+                    nearby.area = area;
+                    nearby.strategy = selectedMethod;
+                    nearby.blockSize = blockSize;
                   }
                 } else if (anyBorderOk) {
                   // At least one strategy produced a clean border but the bits matched no guitar ID

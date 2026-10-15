@@ -10,12 +10,13 @@ import {
   solvePose,
   FRETS_FOR_DRAWING,
   FRET_ABSOLUTE_DISTANCES_FROM_NUT,
-  ARUCO_MARKER_MAP,
-  DEFAULT_CAM_MATRIX,
-  DEFAULT_DIST_COEF
+  ARUCO_MARKER_MAP
 } from '../utils/guitar_math';
+import { getStreamCameraInfo, getCalibrationFor, scaleCalibration, CALIBRATION_CHANGED_EVENT } from '../utils/camera_calibration';
+import CameraCalibrationPanel from './CameraCalibrationPanel';
 import { detectChordFromFingers, createChordSmoother } from '../utils/chord_detector';
 import { guitarAudio, GUITAR_INSTRUMENTS } from '../utils/guitar_audio';
+import { stereoTracker } from '../utils/stereo_tracker';
 import SongHighway from './SongHighway';
 import RecorderPanel from './RecorderPanel';
 import { SessionRecorder, saveRecordingFiles, buildFrameRecord, round1, round3 } from '../utils/session_recorder';
@@ -309,6 +310,70 @@ export default function ARCamera({
   }, [selectedDeviceId]);
 
   const [availableCameras, setAvailableCameras] = useState([]);
+
+  // Stereo 3D (Dual-Camera) tracking
+  const [stereoEnabled, setStereoEnabled] = useState(() => {
+    return localStorage.getItem('arguitar_stereo_enabled') === 'true';
+  });
+  const stereoEnabledRef = useRef(stereoEnabled);
+  useEffect(() => {
+    stereoEnabledRef.current = stereoEnabled;
+    localStorage.setItem('arguitar_stereo_enabled', stereoEnabled ? 'true' : 'false');
+  }, [stereoEnabled]);
+
+  const [secondaryDeviceId, setSecondaryDeviceId] = useState(() => {
+    return localStorage.getItem('arguitar_secondary_cam') || '';
+  });
+  const secondaryDeviceIdRef = useRef(secondaryDeviceId);
+  useEffect(() => {
+    secondaryDeviceIdRef.current = secondaryDeviceId;
+    if (secondaryDeviceId) {
+      localStorage.setItem('arguitar_secondary_cam', secondaryDeviceId);
+    } else {
+      localStorage.removeItem('arguitar_secondary_cam');
+    }
+  }, [secondaryDeviceId]);
+
+  const [stereoStatus, setStereoStatus] = useState({ calibrated: false, baseline: '0', angle: '0', liveClearance: null });
+  const [strumOffset, setStrumOffset] = useState(() => stereoTracker.strumPlaneOffsetCm);
+  const [showPip, setShowPip] = useState(true);
+
+  // Per-camera intrinsic calibration
+  const [showCalibration, setShowCalibration] = useState(false);
+  const isCalibratingRef = useRef(false);
+  const calibVersionRef = useRef(0);
+  const [calibStatus, setCalibStatus] = useState({ cam1: false, cam2: false });
+  useEffect(() => {
+    isCalibratingRef.current = showCalibration;
+  }, [showCalibration]);
+  useEffect(() => {
+    const onCalibChanged = () => {
+      // Force camera matrices to be rebuilt and stereo extrinsics to be re-estimated with the new intrinsics
+      calibVersionRef.current++;
+      stereoTracker.reset();
+    };
+    window.addEventListener(CALIBRATION_CHANGED_EVENT, onCalibChanged);
+    return () => window.removeEventListener(CALIBRATION_CHANGED_EVENT, onCalibChanged);
+  }, []);
+
+  /** Build OpenCV camera matrices for a stream, using that camera's stored calibration if available. */
+  const buildCameraMats = (cv, videoEl, w, h) => {
+    const info = getStreamCameraInfo(videoEl);
+    const scaled = scaleCalibration(getCalibrationFor(info), w, h);
+    const mats = createCameraMats(cv, w, h, scaled);
+    return { width: w, height: h, calibVersion: calibVersionRef.current, ...mats };
+  };
+  const secondaryVideoRef = useRef(null);
+  const secondaryCanvasRef = useRef(null);
+  const pipCanvasRef = useRef(null);
+  const secondaryCameraMatsRef = useRef({ width: 0, height: 0, camMatrix: null, distCoef: null });
+  const fullMarkerPosesRef = useRef({});
+  const lastStereoStatusUpdateRef = useRef(0);
+  const secMarkerFrameCountRef = useRef(0);
+  const cachedSecHandLandmarksRef = useRef(null);
+  const lastSecDetectedMarkersRef = useRef([]);
+  const lastLiveClearanceRef = useRef({ cm: null, time: 0 });
+
   const [isMirrored, setIsMirrored] = useState(facingMode !== 'environment');
   const isMirroredRef = useRef(isMirrored);
   useEffect(() => {
@@ -446,6 +511,7 @@ export default function ARCamera({
 
   const loopRef = useRef(null);
   const landmarkerRef = useRef(null);
+  const secLandmarkerRef = useRef(null);
   const loadingRef = useRef(false);
   const lastTimeRef = useRef(0);
   const lastLoggedIdsRef = useRef("");
@@ -521,10 +587,11 @@ export default function ARCamera({
         mpDelegate
       },
       calibration: {
-        note: 'Default intrinsics are defined at 640x480 and scaled per-axis to the stream resolution (createCameraMats)',
-        baseCamMatrix640x480: DEFAULT_CAM_MATRIX,
-        distCoef: DEFAULT_DIST_COEF,
-        solvePoseMarkerSideCm: 8.0
+        calibrated: !!cameraMatsRef.current.isCalibrated,
+        camMatrix: cameraMatsRef.current.camMatrix ? Array.from(cameraMatsRef.current.camMatrix.data64F) : null,
+        matrixResolution: { width: cameraMatsRef.current.width, height: cameraMatsRef.current.height },
+        distCoef: cameraMatsRef.current.distArr || null,
+        solvePoseMarkerSideCm: 3.1
       },
       markerMap: ARUCO_MARKER_MAP,
       fretDistancesFromNutCm: FRET_ABSOLUTE_DISTANCES_FROM_NUT,
@@ -593,6 +660,112 @@ export default function ARCamera({
       if (recorder.isRecording) recorder.stop();
     };
   }, [recorder]);
+
+  // Secondary camera stream management for Stereo 3D tracking
+  const startSecondaryCamera = async (deviceId) => {
+    try {
+      if (!deviceId) return;
+      console.log(`[Stereo] Requesting secondary camera (deviceId: ${deviceId})...`);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          deviceId: { exact: deviceId },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          aspectRatio: { ideal: 16 / 9 },
+          frameRate: { ideal: 30 }
+        }
+      });
+      if (secondaryVideoRef.current) {
+        secondaryVideoRef.current.srcObject = stream;
+        await secondaryVideoRef.current.play();
+        console.log('[Stereo] Secondary camera stream started successfully');
+        if (addLog) addLog("👓 Secondary camera feed active for Stereo 3D");
+        ensureSecLandmarker();
+      }
+    } catch (e) {
+      console.warn('[Stereo] Failed to start secondary camera:', e);
+      if (addLog) addLog(`⚠️ Stereo secondary camera error: ${e.message}`);
+    }
+  };
+
+  const ensureSecLandmarker = async () => {
+    if (secLandmarkerRef.current) return;
+    const { FilesetResolver, HandLandmarker } = window;
+    if (!FilesetResolver || !HandLandmarker) return;
+    try {
+      console.log("[Stereo] Initializing dedicated HandLandmarker for Camera 2 (isolated CPU delegate)...");
+      const vision = await FilesetResolver.forVisionTasks(window.location.origin + "/wasm");
+      const resp = await fetch(window.location.origin + "/hand_landmarker.task");
+      const buf = new Uint8Array(await resp.arrayBuffer());
+
+      // Protect against Emscripten collisions
+      const tempModule = window.Module;
+      if (window.Module) {
+        window.Module = undefined;
+      }
+
+      // CPU delegate ensures Camera 1 has 100% exclusive access to WebGL without texture or state conflicts
+      secLandmarkerRef.current = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetBuffer: buf,
+          delegate: "CPU"
+        },
+        runningMode: "VIDEO",
+        numHands: 2, // Track both fretting and strumming hands so neither shadows the other
+        minHandDetectionConfidence: 0.45,
+        minHandPresenceConfidence: 0.45,
+        minTrackingConfidence: 0.45
+      });
+
+      if (tempModule && !window.Module) {
+        window.Module = tempModule;
+      }
+
+      console.log("[Stereo] Dedicated Camera 2 HandLandmarker READY on CPU!");
+      if (addLog) addLog("👓 Cam 2 hand tracker ready (isolated CPU pipeline)");
+    } catch (e) {
+      console.warn("[Stereo] Error initializing Cam 2 landmarker:", e);
+    }
+  };
+
+  const stopSecondaryCamera = () => {
+    if (secondaryVideoRef.current?.srcObject) {
+      secondaryVideoRef.current.srcObject.getTracks().forEach(t => t.stop());
+      secondaryVideoRef.current.srcObject = null;
+    }
+    if (secLandmarkerRef.current) {
+      try {
+        secLandmarkerRef.current.close();
+      } catch (e) {}
+      secLandmarkerRef.current = null;
+    }
+    cachedSecHandLandmarksRef.current = null;
+    lastSecDetectedMarkersRef.current = [];
+    stereoTracker.reset();
+    setStereoStatus({ calibrated: false, baseline: '0', angle: '0', liveClearance: null });
+    lastLiveClearanceRef.current = { cm: null, time: 0 };
+  };
+
+  useEffect(() => {
+    if (cameraActive && stereoEnabled && secondaryDeviceId) {
+      startSecondaryCamera(secondaryDeviceId);
+    } else {
+      stopSecondaryCamera();
+    }
+    return () => {
+      stopSecondaryCamera();
+    };
+  }, [cameraActive, stereoEnabled, secondaryDeviceId]);
+
+  // Auto-select a 2nd camera when stereo is turned on if none is selected
+  useEffect(() => {
+    if (stereoEnabled && availableCameras.length >= 2 && !secondaryDeviceId) {
+      const other = availableCameras.find(c => c.deviceId !== selectedDeviceId);
+      if (other?.deviceId) {
+        setSecondaryDeviceId(other.deviceId);
+      }
+    }
+  }, [stereoEnabled, availableCameras, selectedDeviceId, secondaryDeviceId]);
 
   // Helper to obtain media stream with progressive multi-tier fallback
   // Prevents 'Requested device not found' on Mac Mini / external USB webcams that lack facingMode metadata
@@ -797,6 +970,7 @@ export default function ARCamera({
 
   // Stop webcam feed
   const stopCamera = () => {
+    stopSecondaryCamera();
     // Finalise and save any in-progress recording before the camera tracks are torn down
     if (recorder.isRecording) {
       handleStopRecording();
@@ -983,7 +1157,8 @@ export default function ARCamera({
     }
 
     const video = videoRef.current;
-    if (video.readyState !== video.HAVE_ENOUGH_DATA) {
+    if (video.readyState !== video.HAVE_ENOUGH_DATA || isCalibratingRef.current) {
+      // Paused while the calibration panel owns the CPU
       loopRef.current = requestAnimationFrame(processFrame);
       return;
     }
@@ -1104,13 +1279,15 @@ export default function ARCamera({
 
       // Solve poses (3D positions) of markers for perspective correction (cached by resolution)
       markerPoses = {};
-      if (!cameraMatsRef.current.camMatrix || cameraMatsRef.current.width !== width || cameraMatsRef.current.height !== height) {
+      const fullPosesCam1 = {};
+      if (!cameraMatsRef.current.camMatrix || cameraMatsRef.current.width !== width || cameraMatsRef.current.height !== height ||
+          cameraMatsRef.current.calibVersion !== calibVersionRef.current) {
         if (cameraMatsRef.current.camMatrix) {
           cameraMatsRef.current.camMatrix.delete();
           cameraMatsRef.current.distCoef.delete();
         }
-        const { camMatrix, distCoef } = createCameraMats(cv, width, height);
-        cameraMatsRef.current = { width, height, camMatrix, distCoef };
+        cameraMatsRef.current = buildCameraMats(cv, video, width, height);
+        setCalibStatus(prev => prev.cam1 === cameraMatsRef.current.isCalibrated ? prev : { ...prev, cam1: cameraMatsRef.current.isCalibrated });
       }
       const { camMatrix, distCoef } = cameraMatsRef.current;
 
@@ -1120,6 +1297,7 @@ export default function ARCamera({
             const pose = solvePose(cv, m.corners, camMatrix, distCoef);
             if (pose) {
               markerPoses[m.id] = pose.tvec; // [x, y, z]
+              fullPosesCam1[m.id] = pose;
             }
           } catch (e) {
             console.error("Error solving pose for marker:", m.id, e);
@@ -1127,6 +1305,114 @@ export default function ARCamera({
         }
       });
       cachedMarkerPosesRef.current = markerPoses;
+      fullMarkerPosesRef.current = fullPosesCam1;
+
+      // Secondary Camera Stereo Vision Processing
+      let secDetectedMarkers = [];
+      const secVideo = secondaryVideoRef.current;
+      if (stereoEnabledRef.current && secVideo && secVideo.readyState >= 2 && secVideo.videoWidth > 0) {
+        secMarkerFrameCountRef.current++;
+        const frameIdx = secMarkerFrameCountRef.current;
+
+        // Throttling: While aligning, scan every 2 frames. Once calibrated, scan every 45 frames (~1.5s)
+        const shouldDetectSecMarkers = !stereoTracker.calibrated
+          ? (frameIdx % 2 === 0)
+          : (frameIdx % 45 === 0 && Object.keys(fullPosesCam1).length > 0);
+
+        const vW = secVideo.videoWidth || 640;
+        const vH = secVideo.videoHeight || 360;
+        const targetW = 640;
+        const targetH = Math.round(targetW * (vH / vW));
+
+        if (shouldDetectSecMarkers) {
+          if (!secondaryCanvasRef.current || secondaryCanvasRef.current.width !== targetW || secondaryCanvasRef.current.height !== targetH) {
+            if (!secondaryCanvasRef.current) {
+              secondaryCanvasRef.current = document.createElement('canvas');
+            }
+            secondaryCanvasRef.current.width = targetW;
+            secondaryCanvasRef.current.height = targetH;
+          }
+          const secCanvas = secondaryCanvasRef.current;
+          const secCtx = secCanvas.getContext('2d');
+          secCtx.drawImage(secVideo, 0, 0, targetW, targetH);
+
+          try {
+            const secImgData = secCtx.getImageData(0, 0, secCanvas.width, secCanvas.height);
+            let secMat = cv.matFromImageData(secImgData);
+            const secRes = detectMarkers(cv, secMat, { collectDetails: false });
+            secDetectedMarkers = secRes.markers || [];
+            lastSecDetectedMarkersRef.current = secDetectedMarkers;
+            secMat.delete();
+          } catch (secErr) {
+            // ignore transient frame error
+          }
+
+          if (secDetectedMarkers.length > 0) {
+            if (!secondaryCameraMatsRef.current.camMatrix || secondaryCameraMatsRef.current.width !== secCanvas.width ||
+                secondaryCameraMatsRef.current.height !== secCanvas.height ||
+                secondaryCameraMatsRef.current.calibVersion !== calibVersionRef.current) {
+              if (secondaryCameraMatsRef.current.camMatrix) {
+                secondaryCameraMatsRef.current.camMatrix.delete();
+                secondaryCameraMatsRef.current.distCoef.delete();
+              }
+              secondaryCameraMatsRef.current = buildCameraMats(cv, secVideo, secCanvas.width, secCanvas.height);
+              setCalibStatus(prev => prev.cam2 === secondaryCameraMatsRef.current.isCalibrated ? prev : { ...prev, cam2: secondaryCameraMatsRef.current.isCalibrated });
+            }
+            const { camMatrix: scm, distCoef: sdc } = secondaryCameraMatsRef.current;
+
+            let fullPosesCam2 = {};
+            secDetectedMarkers.forEach(sm => {
+              const sp = solvePose(cv, sm.corners, scm, sdc);
+              if (sp) fullPosesCam2[sm.id] = sp;
+            });
+
+            // Continuously update stereo relative extrinsic calibration
+            stereoTracker.updateCalibrationFromMarkers(fullPosesCam1, fullPosesCam2);
+
+            const now = performance.now();
+            if (now - lastStereoStatusUpdateRef.current > 500) {
+              lastStereoStatusUpdateRef.current = now;
+              const hasRecent = (now - lastLiveClearanceRef.current.time) < 1500 && lastLiveClearanceRef.current.cm !== null;
+              setStereoStatus({
+                calibrated: stereoTracker.calibrated,
+                baseline: stereoTracker.baselineCm.toFixed(1),
+                angle: stereoTracker.convergenceDeg.toFixed(1),
+                liveClearance: hasRecent ? lastLiveClearanceRef.current.cm.toFixed(1) : null
+              });
+            }
+          }
+        } else {
+          secDetectedMarkers = lastSecDetectedMarkersRef.current || [];
+        }
+
+        // Draw PiP thumbnail if enabled (fast GPU drawImage from HTML5 video element)
+        if (showPip && pipCanvasRef.current) {
+          const pCanvas = pipCanvasRef.current;
+          const pCtx = pCanvas.getContext('2d');
+          if (pCanvas.width !== targetW || pCanvas.height !== targetH) {
+            pCanvas.width = targetW;
+            pCanvas.height = targetH;
+          }
+          pCtx.drawImage(secVideo, 0, 0, targetW, targetH);
+          secDetectedMarkers.forEach(sm => {
+            if (sm.corners && sm.corners.length >= 4) {
+              pCtx.strokeStyle = '#38bdf8';
+              pCtx.lineWidth = 3;
+              pCtx.beginPath();
+              pCtx.moveTo(sm.corners[0].x, sm.corners[0].y);
+              for (let i = 1; i < 4; i++) pCtx.lineTo(sm.corners[i].x, sm.corners[i].y);
+              pCtx.closePath();
+              pCtx.stroke();
+              drawUnmirroredText(pCtx, `M${sm.id}`, sm.corners[0].x + 4, sm.corners[0].y - 6, {
+                font: 'bold 16px monospace',
+                fillStyle: '#f59e0b',
+                align: 'left',
+                baseline: 'bottom'
+              });
+            }
+          });
+        }
+      }
 
       // Solve raw neck geometry from detected markers
       const rawNeck = getNeckGeometry(markers, neckWidthScaleRef.current, markerPoses, fretScaleLengthRef.current);
@@ -1273,7 +1559,42 @@ export default function ARCamera({
           handLandmarks = handLandmarksResults.landmarks;
         }
       } catch (err) {
-        console.error("Error in hand tracking:", err);
+        console.error("Error in hand tracking (Cam 1):", err);
+      }
+    }
+
+    // Step C-2: Detect hands in Secondary Camera (Cam 2) using DEDICATED HandLandmarker instance
+    let secHandLandmarks = null;
+    const secVideo = secondaryVideoRef.current;
+    if (stereoEnabledRef.current && secLandmarkerRef.current && secVideo && secVideo.readyState >= 2 && secVideo.videoWidth > 0) {
+      if (handLandmarks && handLandmarks.length > 0) {
+        try {
+          const secHandRes = secLandmarkerRef.current.detectForVideo(secVideo, timestamp);
+          if (secHandRes && secHandRes.landmarks && secHandRes.landmarks.length > 0) {
+            secHandLandmarks = secHandRes.landmarks;
+            cachedSecHandLandmarksRef.current = secHandLandmarks;
+          } else if (cachedSecHandLandmarksRef.current) {
+            secHandLandmarks = cachedSecHandLandmarksRef.current;
+          }
+        } catch (err2) {
+          // Ignore minor timestamp jitter
+        }
+      } else {
+        cachedSecHandLandmarksRef.current = null;
+      }
+
+      // Draw detected hands on PiP canvas for instant visual confirmation
+      if (showPip && pipCanvasRef.current && secHandLandmarks && secHandLandmarks.length > 0) {
+        const pCanvas = pipCanvasRef.current;
+        const pCtx = pCanvas.getContext('2d');
+        secHandLandmarks.forEach(sHand => {
+          pCtx.fillStyle = '#38bdf8';
+          sHand.forEach(lm => {
+            pCtx.beginPath();
+            pCtx.arc(lm.x * pCanvas.width, lm.y * pCanvas.height, 2.5, 0, 2 * Math.PI);
+            pCtx.fill();
+          });
+        });
       }
     }
     const dMp = performance.now() - tMpStart;
@@ -1363,16 +1684,59 @@ export default function ARCamera({
       }
     }
 
-    // 4. Calculate positions and fret/string for all 5 fingers of the fretting hand
+    // 4. Calculate positions and fret/string for all 5 fingers of the fretting hand (with 3D Stereo Touch Detection)
     const trackedFingers = [];
     if (fretHandLandmarks) {
+      // Find matching fretting hand in Camera 2 for 3D depth triangulation
+      let secFretHand = null;
+      const { camMatrix } = cameraMatsRef.current;
+      const { camMatrix: scm } = secondaryCameraMatsRef.current;
+      let K1 = null, K2 = null;
+      const sW = secondaryCanvasRef.current?.width || 640;
+      const sH = secondaryCanvasRef.current?.height || 360;
+
+      if (stereoTracker.calibrated && secHandLandmarks && secHandLandmarks.length > 0 && camMatrix && scm) {
+        K1 = {
+          fx: camMatrix.doubleAt(0),
+          fy: camMatrix.doubleAt(4),
+          cx: camMatrix.doubleAt(2),
+          cy: camMatrix.doubleAt(5)
+        };
+        K2 = {
+          fx: scm.doubleAt(0),
+          fy: scm.doubleAt(4),
+          cx: scm.doubleAt(2),
+          cy: scm.doubleAt(5)
+        };
+
+        // In Cam 1, fretting hand palm center is Landmark 9 (middle MCP)
+        const p1 = { x: fretHandLandmarks[9].x * width, y: fretHandLandmarks[9].y * height };
+        let lowestFretMiss = Infinity;
+
+        for (const sHand of secHandLandmarks) {
+          if (!sHand[9]) continue;
+          const p2 = { x: sHand[9].x * sW, y: sHand[9].y * sH };
+          const testTri = stereoTracker.triangulate(p1, p2, K1, K2, cameraMatsRef.current.distArr, secondaryCameraMatsRef.current.distArr);
+          if (testTri && testTri.missDist < 8.0) {
+            if (testTri.missDist < lowestFretMiss) {
+              lowestFretMiss = testTri.missDist;
+              secFretHand = sHand;
+            }
+          }
+        }
+      }
+
       FRET_FINGERS.forEach(cfg => {
         const tip = fretHandLandmarks[cfg.tipIdx];
         const dip = fretHandLandmarks[cfg.dipIdx] || tip;
         if (tip) {
+          // Project forward along the distal phalanx (DIP -> TIP) to the true anatomical apex.
+          const dx = tip.x - dip.x;
+          const dy = tip.y - dip.y;
+          const apexFactor = 0.25;
           const pos = {
-            x: (tip.x * 0.75 + dip.x * 0.25) * width,
-            y: (tip.y * 0.75 + dip.y * 0.25) * height
+            x: (tip.x + dx * apexFactor) * width,
+            y: (tip.y + dy * apexFactor) * height
           };
 
           let fret = 0;
@@ -1386,13 +1750,53 @@ export default function ARCamera({
             fretLocator = fretInfo[2];
           }
 
+          // True 3D Stereo Touch vs Hover Detection
+          let clearanceCm = null;
+          let isPressed = true;
+          let isHovering = false;
+
+          if (secFretHand && K1 && K2 && fretLocator > 0) {
+            const secTip = secFretHand[cfg.tipIdx];
+            const secDip = secFretHand[cfg.dipIdx] || secTip;
+            if (secTip) {
+              const secDx = secTip.x - secDip.x;
+              const secDy = secTip.y - secDip.y;
+              const secPos = {
+                x: (secTip.x + secDx * apexFactor) * sW,
+                y: (secTip.y + secDy * apexFactor) * sH
+              };
+              const fingerTri = stereoTracker.triangulate(pos, secPos, K1, K2, cameraMatsRef.current.distArr, secondaryCameraMatsRef.current.distArr);
+              if (fingerTri && fingerTri.missDist <= 7.0 && fingerTri.point) {
+                clearanceCm = stereoTracker.calculateFingertipClearance(
+                  fingerTri.point,
+                  fretLocator,
+                  fullMarkerPosesRef.current
+                );
+                if (clearanceCm !== null) {
+                  // Touching string / pressed down against fretboard: <= 1.8 cm
+                  // Hovering above fretboard: > 1.8 cm
+                  if (clearanceCm <= 1.8 && clearanceCm >= -4.5) {
+                    isPressed = true;
+                    isHovering = false;
+                  } else if (clearanceCm > 1.8 && clearanceCm <= 15.0) {
+                    isPressed = false;
+                    isHovering = true;
+                  }
+                }
+              }
+            }
+          }
+
           trackedFingers.push({
             ...cfg,
             pos,
             fret,
             string,
             fretLocator,
-            isActive: fret > 0 && string > 0
+            clearanceCm,
+            isPressed,
+            isHovering,
+            isActive: fret > 0 && string > 0 && isPressed
           });
         }
       });
@@ -1492,7 +1896,7 @@ export default function ARCamera({
       if (m5 && m5.corners && m5.corners.length >= 4 && handSpanPx > 10) {
         const m5Width = Math.hypot(m5.corners[1].x - m5.corners[0].x, m5.corners[1].y - m5.corners[0].y);
         if (m5Width > 15) {
-          opticalScaleRatio = (handSpanPx / 9.5) / (m5Width / 8.0);
+          opticalScaleRatio = (handSpanPx / 9.5) / (m5Width / 3.1);
         }
       }
 
@@ -1541,8 +1945,111 @@ export default function ARCamera({
         isWristPositionValid = (tWrist >= 0.45 && tWrist <= 2.30);
       }
 
-      // Hand is close enough to guitar if not pulled forward towards camera:
-      const isDistanceClose = (opticalScaleRatio <= 1.70);
+      // Multi-Camera Stereo 3D Triangulation & Single-Camera Fallback:
+      let isDistanceClose = true;
+      let stereoClearanceCm = null;
+      let isTriangulated = false;
+      let triMissDist = null;
+
+      let secPick = null;
+      if (secHandLandmarks && secHandLandmarks.length > 0) {
+        const sW = secondaryCanvasRef.current?.width || 640;
+        const sH = secondaryCanvasRef.current?.height || 360;
+
+        // If multiple hands are detected in Cam 2, pair with the hand that matches
+        // Cam 1's strumming hand at guitar depth with minimal ray miss distance
+        let bestCandidate = null;
+        let lowestScore = Infinity;
+
+        const { camMatrix } = cameraMatsRef.current;
+        const { camMatrix: scm } = secondaryCameraMatsRef.current;
+
+        const activeGuitarPose = fullMarkerPosesRef.current?.[5] || fullMarkerPosesRef.current?.[4] || (markerPoses[5] ? { tvec: markerPoses[5] } : null);
+        const zGuitarPose = activeGuitarPose?.tvec?.[2] || activeGuitarPose?.[2] || 88.0;
+        const expectedDepthCm = zGuitarPose * stereoTracker.scaleFactor;
+
+        for (const sHand of secHandLandmarks) {
+          const tTip = sHand[4];
+          const iTip = sHand[8];
+          let cand = null;
+          if (tTip && iTip) {
+            cand = { x: ((tTip.x + iTip.x) / 2) * sW, y: ((tTip.y + iTip.y) / 2) * sH };
+          } else if (iTip) {
+            cand = { x: iTip.x * sW, y: iTip.y * sH };
+          }
+          if (cand && stereoTracker.calibrated && camMatrix && scm) {
+            const K1 = {
+              fx: camMatrix.doubleAt(0),
+              fy: camMatrix.doubleAt(4),
+              cx: camMatrix.doubleAt(2),
+              cy: camMatrix.doubleAt(5)
+            };
+            const K2 = {
+              fx: scm.doubleAt(0),
+              fy: scm.doubleAt(4),
+              cx: scm.doubleAt(2),
+              cy: scm.doubleAt(5)
+            };
+            const testTri = stereoTracker.triangulate({ x: pickX, y: pickY }, cand, K1, K2, cameraMatsRef.current.distArr, secondaryCameraMatsRef.current.distArr);
+            if (testTri) {
+              const depthDiff = Math.abs(testTri.depth - expectedDepthCm);
+              // Reject false cross-hand intersections (e.g. fretting hand crossing strumming hand ray)
+              if (depthDiff <= 22.0 && testTri.missDist <= 6.5) {
+                const score = testTri.missDist + depthDiff * 0.35;
+                if (score < lowestScore) {
+                  lowestScore = score;
+                  bestCandidate = { pick: cand, tri: testTri };
+                }
+              }
+            }
+          }
+        }
+
+        if (bestCandidate && bestCandidate.tri && bestCandidate.tri.point) {
+          secPick = bestCandidate.pick;
+          triMissDist = bestCandidate.tri.missDist;
+          stereoClearanceCm = stereoTracker.calculateDistanceToGuitarPlane(
+            bestCandidate.tri.point,
+            activeGuitarPose
+          );
+          // Only accept triangulated depth if clearance is within physical playing envelope (-10cm to +25cm)
+          if (stereoClearanceCm !== null && stereoClearanceCm >= -10.0 && stereoClearanceCm <= 25.0) {
+            isTriangulated = true;
+            lastLiveClearanceRef.current = { cm: stereoClearanceCm, time: performance.now() };
+          } else {
+            isTriangulated = false;
+            stereoClearanceCm = null;
+          }
+        }
+      }
+
+      // Draw matched pick point on PiP canvas for instant visual feedback
+      if (showPip && pipCanvasRef.current && secPick) {
+        const pCanvas = pipCanvasRef.current;
+        const pCtx = pCanvas.getContext('2d');
+        pCtx.save();
+        pCtx.strokeStyle = isTriangulated ? '#10b981' : '#f59e0b';
+        pCtx.lineWidth = 2.5;
+        pCtx.beginPath();
+        pCtx.arc(secPick.x, secPick.y, 8, 0, 2 * Math.PI);
+        pCtx.stroke();
+        pCtx.fillStyle = isTriangulated ? 'rgba(16, 185, 129, 0.4)' : 'rgba(245, 158, 11, 0.4)';
+        pCtx.fill();
+        pCtx.restore();
+      }
+
+      if (isTriangulated) {
+        // TRUE 2-Camera Stereo Depth Algorithm:
+        // Physical clearance in centimeters to string plane (zeroed at string surface):
+        // Active strum zone is between -4.0 cm (through strings) and +3.5 cm (touch/skim)
+        // Air hover (> +3.5 cm) is cleanly gated out!
+        isDistanceClose = (stereoClearanceCm <= 3.5 && stereoClearanceCm >= -4.0);
+      } else {
+        // Graceful 1-Camera Algorithm:
+        // Monocular optical scale ratio relative to Marker 5
+        isDistanceClose = (opticalScaleRatio <= 1.70);
+      }
+
       const isStrumPostureValid = isWristAngleValid && isWristPositionValid;
 
       // Master flag: Is the hand physically away from the guitar or in an obvious non-playing posture?
@@ -1633,7 +2140,7 @@ export default function ARCamera({
         } else if (!isWristPositionValid) {
           reasonLabel = `↷ OFF-BODY (t${tWrist.toFixed(2)})`;
         } else if (!isDistanceClose) {
-          reasonLabel = `↷ AWAY (x${opticalScaleRatio.toFixed(1)})`;
+          reasonLabel = (stereoClearanceCm !== null) ? `↷ AIR HOVER (${stereoClearanceCm >= 0 ? '+' : ''}${stereoClearanceCm.toFixed(1)}cm)` : `↷ AWAY (x${opticalScaleRatio.toFixed(1)})`;
         }
         drawUnmirroredText(ctx, reasonLabel, pickX, pickY - 18, {
           font: 'bold 10px monospace',
@@ -1698,7 +2205,10 @@ export default function ARCamera({
         postureOk: isStrumPostureValid,
         handAway: isHandAway,
         airReset: isAirReset,
-        mode: strumModeRef.current
+        mode: strumModeRef.current,
+        isTriangulated,
+        clearance: (stereoClearanceCm !== null) ? round1(stereoClearanceCm) : null,
+        triMiss: (triMissDist !== null) ? round1(triMissDist) : null
       };
 
       // Continuous Sub-Frame Line Segment Crossing Detection
@@ -1746,8 +2256,8 @@ export default function ARCamera({
           // Strum mode authorization
           let allowStrum = true;
           if (strumModeRef.current === 'down') {
-            // Down-only mode: requires downstroke
-            allowStrum = isDownstroke;
+            // Down-only mode: requires downstroke and hand in playing zone
+            allowStrum = isDownstroke && !isHandAway;
           } else if (strumModeRef.current === 'smart') {
             // Smart Guard:
             // 1. Hand MUST NOT be far away from the guitar
@@ -1756,8 +2266,8 @@ export default function ARCamera({
               allowStrum = false;
             }
           } else if (strumModeRef.current === 'both') {
-            // Down & Up mode: unconditional strumming
-            allowStrum = true;
+            // Down & Up mode: requires hand in playing zone
+            allowStrum = !isHandAway;
           }
 
           if (recStrumMetrics) {
@@ -2128,36 +2638,69 @@ export default function ARCamera({
 
     // Draw fingertip target rings and finger badges for all fretting fingers
     trackedFingers.forEach(f => {
-      // Outer target ring
-      ctx.strokeStyle = f.ringColor;
-      ctx.lineWidth = f.isActive ? 2.5 : 1.5;
-      ctx.beginPath();
-      ctx.arc(f.pos.x, f.pos.y, f.isActive ? 13 : 9, 0, 2 * Math.PI);
-      ctx.stroke();
+      ctx.save();
+      if (f.isHovering) {
+        // Finger is hovering above fretboard in 3D: soft dashed hover ring
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.7)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.arc(f.pos.x, f.pos.y, 11, 0, 2 * Math.PI);
+        ctx.stroke();
 
-      // Inner dot
-      ctx.fillStyle = f.isActive ? f.color : 'rgba(15, 23, 42, 0.7)';
-      ctx.beginPath();
-      ctx.arc(f.pos.x, f.pos.y, f.isActive ? 6 : 4, 0, 2 * Math.PI);
-      ctx.fill();
+        ctx.fillStyle = 'rgba(148, 163, 184, 0.25)';
+        ctx.beginPath();
+        ctx.arc(f.pos.x, f.pos.y, 4, 0, 2 * Math.PI);
+        ctx.fill();
 
-      // Finger number label: '1', '2', '3', '4', 'T' above fingertip
-      drawUnmirroredText(ctx, f.num, f.pos.x, f.pos.y - 15, {
-        font: 'bold 11px monospace',
-        fillStyle: f.color,
-        align: 'center',
-        baseline: 'bottom'
-      });
-
-      // If active on fretboard: show Fret & String badge below fingertip
-      if (f.isActive) {
-        drawUnmirroredText(ctx, `F${f.fret}·S${f.string}`, f.pos.x, f.pos.y + 15, {
+        drawUnmirroredText(ctx, f.num, f.pos.x, f.pos.y - 14, {
           font: 'bold 10px monospace',
-          fillStyle: '#ffffff',
+          fillStyle: 'rgba(148, 163, 184, 0.85)',
+          align: 'center',
+          baseline: 'bottom'
+        });
+
+        // Hover clearance distance badge: e.g. "↷ 2.5cm"
+        const hoverLabel = (f.clearanceCm !== null) ? `↷ ${f.clearanceCm.toFixed(1)}cm` : 'HOVER';
+        drawUnmirroredText(ctx, hoverLabel, f.pos.x, f.pos.y + 13, {
+          font: '9px monospace',
+          fillStyle: 'rgba(56, 189, 248, 0.85)',
           align: 'center',
           baseline: 'top'
         });
+      } else {
+        // Finger is pressing strings against the fretboard (or 1-cam fallback):
+        ctx.strokeStyle = f.ringColor;
+        ctx.lineWidth = f.isActive ? 2.5 : 1.5;
+        ctx.beginPath();
+        ctx.arc(f.pos.x, f.pos.y, f.isActive ? 13 : 9, 0, 2 * Math.PI);
+        ctx.stroke();
+
+        // Inner dot
+        ctx.fillStyle = f.isActive ? f.color : 'rgba(15, 23, 42, 0.7)';
+        ctx.beginPath();
+        ctx.arc(f.pos.x, f.pos.y, f.isActive ? 6 : 4, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Finger number label: '1', '2', '3', '4', 'T' above fingertip
+        drawUnmirroredText(ctx, f.num, f.pos.x, f.pos.y - 15, {
+          font: 'bold 11px monospace',
+          fillStyle: f.color,
+          align: 'center',
+          baseline: 'bottom'
+        });
+
+        // If active on fretboard: show Fret & String badge below fingertip
+        if (f.isActive) {
+          drawUnmirroredText(ctx, `F${f.fret}·S${f.string}`, f.pos.x, f.pos.y + 15, {
+            font: 'bold 10px monospace',
+            fillStyle: '#ffffff',
+            align: 'center',
+            baseline: 'top'
+          });
+        }
       }
+      ctx.restore();
     });
 
     // Draw Real-time AR Chord Card or Strum Banner
@@ -2785,6 +3328,60 @@ export default function ARCamera({
           className={`overlay-canvas ${!isMirrored ? 'unmirrored' : ''}`}
         />
 
+        {/* Secondary Camera Feed for Stereo 3D (Background / PiP) */}
+        <video
+          ref={secondaryVideoRef}
+          playsInline
+          muted
+          style={{ display: 'none' }}
+        />
+
+        {/* Optional Picture-in-Picture for Secondary Camera */}
+        {stereoEnabled && showPip && cameraActive && (
+          <div style={{
+            position: 'absolute',
+            bottom: '16px',
+            right: '16px',
+            width: '240px',
+            height: '150px',
+            borderRadius: '10px',
+            border: stereoStatus.calibrated ? '2px solid rgba(56, 189, 248, 0.7)' : '2px solid rgba(245, 158, 11, 0.7)',
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.7)',
+            background: '#090d16',
+            overflow: 'hidden',
+            zIndex: 25,
+            display: 'flex',
+            flexDirection: 'column'
+          }}>
+            <div style={{
+              background: 'rgba(15, 23, 42, 0.9)',
+              padding: '4px 8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              fontSize: '10px',
+              fontFamily: 'var(--font-mono)',
+              borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+            }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#38bdf8' }}>
+                <Camera size={10} /> Cam 2 (Aux)
+              </span>
+              <span style={{ color: stereoStatus.calibrated ? '#4ade80' : '#f59e0b', fontWeight: 'bold' }}>
+                {stereoStatus.calibrated ? `🟢 ${stereoStatus.baseline}cm` : '🟡 Aligning...'}
+              </span>
+            </div>
+            <canvas
+              ref={pipCanvasRef}
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                transform: isMirrored ? 'scaleX(-1)' : 'none'
+              }}
+            />
+          </div>
+        )}
+
         {/* Welcoming Interactive Hero Overlay when Camera is Inactive */}
         {!cameraActive && (
           <div style={{
@@ -2969,6 +3566,18 @@ export default function ARCamera({
               onMark={handleMarkEvent}
               onReset={handleResetRecorder}
               onClose={() => setShowRecorder(false)}
+            />
+          )}
+
+          {/* Per-camera intrinsic calibration (pauses AR processing while open) */}
+          {showCalibration && (
+            <CameraCalibrationPanel
+              videoRef={videoRef}
+              secondaryVideoRef={secondaryVideoRef}
+              stereoEnabled={stereoEnabled}
+              mirrored={isMirrored}
+              addLog={addLog}
+              onClose={() => setShowCalibration(false)}
             />
           )}
 
@@ -3258,6 +3867,28 @@ export default function ARCamera({
                     <span>Flip</span>
                   </button>
                 )}
+
+                {/* Lens / intrinsic calibration */}
+                <button
+                  id="open-camera-calibration"
+                  type="button"
+                  onClick={() => setShowCalibration(true)}
+                  disabled={!cameraActive}
+                  style={{
+                    padding: '3px 8px',
+                    fontSize: '11px',
+                    borderRadius: '5px',
+                    border: (calibStatus.cam1 && (!stereoEnabled || calibStatus.cam2)) ? '1px solid rgba(74, 222, 128, 0.5)' : '1px solid rgba(245, 158, 11, 0.5)',
+                    background: (calibStatus.cam1 && (!stereoEnabled || calibStatus.cam2)) ? 'rgba(74, 222, 128, 0.12)' : 'rgba(245, 158, 11, 0.12)',
+                    color: (calibStatus.cam1 && (!stereoEnabled || calibStatus.cam2)) ? '#86efac' : '#fbbf24',
+                    cursor: cameraActive ? 'pointer' : 'not-allowed',
+                    opacity: cameraActive ? 1 : 0.5,
+                    whiteSpace: 'nowrap'
+                  }}
+                  title="Calibrate camera lens (focal length & distortion) with a printed marker board"
+                >
+                  📐 Calibrate {calibStatus.cam1 ? '✓' : '·'}{stereoEnabled ? (calibStatus.cam2 ? '✓' : '·') : ''}
+                </button>
               </div>
 
               {/* Guitar Tone / Instrument Selector */}
@@ -3295,6 +3926,208 @@ export default function ARCamera({
                     </option>
                   ))}
                 </select>
+              </div>
+
+              {/* Dual-Camera (Stereo 3D) Depth Mode Selector */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                color: 'var(--text-secondary)',
+                fontSize: '12px',
+                fontFamily: 'var(--font-mono)',
+                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
+                paddingLeft: '10px'
+              }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !stereoEnabled;
+                    setStereoEnabled(next);
+                    localStorage.setItem('arguitar_stereo_enabled', next ? 'true' : 'false');
+                    if (addLog) addLog(next ? "👓 Dual-Camera Stereo 3D enabled!" : "Single camera mode restored");
+                  }}
+                  style={{
+                    padding: '3px 8px',
+                    fontSize: '11px',
+                    borderRadius: '5px',
+                    border: stereoEnabled ? '1px solid #38bdf8' : '1px solid rgba(255, 255, 255, 0.15)',
+                    background: stereoEnabled ? 'rgba(6, 182, 212, 0.25)' : 'rgba(255, 255, 255, 0.06)',
+                    color: stereoEnabled ? '#38bdf8' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    fontWeight: stereoEnabled ? 'bold' : 'normal',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                  title="Enable Dual-Camera Stereo 3D Tracking for millimeter-accurate strumming depth and occlusion immunity"
+                >
+                  <span>👓 Stereo 3D</span>
+                  <span style={{
+                    fontSize: '9px',
+                    padding: '1px 4px',
+                    borderRadius: '3px',
+                    background: stereoEnabled ? '#0284c7' : 'rgba(255, 255, 255, 0.1)',
+                    color: '#fff'
+                  }}>
+                    {stereoEnabled ? 'ON' : 'OFF'}
+                  </span>
+                </button>
+
+                {stereoEnabled && (
+                  <>
+                    <select
+                      value={secondaryDeviceId}
+                      onChange={(e) => {
+                        setSecondaryDeviceId(e.target.value);
+                        localStorage.setItem('arguitar_secondary_cam', e.target.value);
+                      }}
+                      style={{
+                        background: 'rgba(255, 255, 255, 0.08)',
+                        border: '1px solid rgba(56, 189, 248, 0.35)',
+                        borderRadius: '6px',
+                        color: '#38bdf8',
+                        padding: '3px 6px',
+                        fontSize: '11px',
+                        fontFamily: 'var(--font-mono)',
+                        cursor: 'pointer',
+                        outline: 'none',
+                        maxWidth: '140px'
+                      }}
+                      title="Select Secondary Camera (Cam 2)"
+                    >
+                      <option value="" style={{ background: '#0f172a', color: '#94a3b8' }}>Select 2nd Cam...</option>
+                      {availableCameras
+                        .filter(cam => cam.deviceId !== selectedDeviceId)
+                        .map((cam, idx) => (
+                          <option key={cam.deviceId || idx} value={cam.deviceId} style={{ background: '#0f172a', color: '#fff' }}>
+                            {cam.label || `Camera ${idx + 2}`}
+                          </option>
+                        ))}
+                    </select>
+
+                    {/* PiP preview toggle */}
+                    <button
+                      type="button"
+                      onClick={() => setShowPip(prev => !prev)}
+                      style={{
+                        padding: '2px 6px',
+                        fontSize: '10px',
+                        borderRadius: '4px',
+                        border: showPip ? '1px solid #06b6d4' : '1px solid rgba(255, 255, 255, 0.15)',
+                        background: showPip ? 'rgba(6, 182, 212, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                        color: showPip ? '#38bdf8' : 'var(--text-secondary)',
+                        cursor: 'pointer'
+                      }}
+                      title="Toggle Cam 2 Picture-in-Picture window"
+                    >
+                      PiP
+                    </button>
+
+                    {/* Live calibration readout */}
+                    <span style={{
+                      fontSize: '10px',
+                      color: stereoStatus.calibrated ? '#4ade80' : '#f59e0b',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '3px',
+                      whiteSpace: 'nowrap'
+                    }}>
+                      {stereoStatus.calibrated ? `🟢 ${stereoStatus.baseline}cm (${stereoStatus.angle}°)` : '🟡 Aligning...'}
+                    </span>
+
+                    {/* Physical Baseline Calibrator */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }} title="Physical distance between webcams in cm (measured 34 cm)">
+                      <span style={{ fontSize: '10px', color: '#94a3b8' }}>Physical:</span>
+                      <input
+                        type="number"
+                        min="10"
+                        max="150"
+                        step="0.5"
+                        defaultValue="34.0"
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          if (val > 0) stereoTracker.setUserBaseline(val);
+                        }}
+                        style={{
+                          width: '42px',
+                          background: 'rgba(255, 255, 255, 0.08)',
+                          border: '1px solid rgba(56, 189, 248, 0.3)',
+                          borderRadius: '4px',
+                          color: '#38bdf8',
+                          padding: '1px 3px',
+                          fontSize: '10px',
+                          fontFamily: 'var(--font-mono)',
+                          textAlign: 'center'
+                        }}
+                      />
+                      <span style={{ fontSize: '10px', color: '#94a3b8' }}>cm</span>
+                    </div>
+
+                    {/* Zero Strum Button */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const now = performance.now();
+                          const last = lastLiveClearanceRef.current;
+                          if (last && last.cm !== null && (now - last.time) < 3000) {
+                            const newOffset = stereoTracker.zeroStrumPlane(last.cm);
+                            setStrumOffset(newOffset);
+                            if (addLog) addLog(`🎯 Strum plane zeroed! (Offset: ${newOffset.toFixed(1)}cm)`);
+                          } else {
+                            if (addLog) addLog(`⚠️ Strum hand not detected in stereo. Rest pick/fingers on strings and try again.`);
+                          }
+                        }}
+                        style={{
+                          padding: '2px 7px',
+                          fontSize: '10px',
+                          borderRadius: '4px',
+                          border: '1px solid rgba(245, 158, 11, 0.5)',
+                          background: 'rgba(245, 158, 11, 0.15)',
+                          color: '#fbbf24',
+                          cursor: 'pointer',
+                          fontWeight: 'bold',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '3px'
+                        }}
+                        title="Touch strings with pick/fingers and click to zero strum depth live (clears air-hover error)"
+                      >
+                        <span>🎯 Zero Strum</span>
+                        {stereoStatus.liveClearance !== null && (
+                          <span style={{ fontSize: '9px', opacity: 0.85 }}>
+                            ({parseFloat(stereoStatus.liveClearance) >= 0 ? '+' : ''}{stereoStatus.liveClearance}cm)
+                          </span>
+                        )}
+                      </button>
+
+                      {/* Reset strum offset button */}
+                      {Math.abs(strumOffset - 1.2) > 0.05 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const def = stereoTracker.resetStrumPlaneOffset();
+                            setStrumOffset(def);
+                            if (addLog) addLog(`Strum offset reset to default (${def.toFixed(1)}cm)`);
+                          }}
+                          style={{
+                            padding: '1px 4px',
+                            fontSize: '9px',
+                            borderRadius: '3px',
+                            border: '1px solid rgba(255, 255, 255, 0.2)',
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            color: '#94a3b8',
+                            cursor: 'pointer'
+                          }}
+                          title="Reset strum offset to default (1.2cm)"
+                        >
+                          ↺
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Neck Width Calibrator */}
@@ -3603,6 +4436,31 @@ export default function ARCamera({
                 {GUITAR_INSTRUMENTS[guitarInstrument]?.badge || 'Acoustic'}
               </span>
             </button>
+
+            {/* Stereo 3D Status Indicator / Toggle */}
+            {stereoEnabled && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setShowPip(prev => !prev);
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 10px',
+                  fontSize: '12px',
+                  borderColor: stereoStatus.calibrated ? '#38bdf8' : '#f59e0b'
+                }}
+                title="Dual-Camera Stereo 3D active (Click to toggle Cam 2 Picture-in-Picture preview)"
+              >
+                <span>👓</span>
+                <span style={{ fontFamily: 'var(--font-mono)', color: stereoStatus.calibrated ? '#38bdf8' : '#fbbf24' }}>
+                  {stereoStatus.calibrated ? `Stereo: ${stereoStatus.baseline}cm` : 'Stereo Aligning'}
+                </span>
+              </button>
+            )}
 
             {/* Strum Mode Cycle Button */}
             <button

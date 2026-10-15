@@ -19,49 +19,80 @@ export const NECK_WIDTH = 4.6; // cm
 export const NUMBER_OF_STRINGS = 6;
 export const ARUCO_MARKER_ABSOLUTE_POSITIONS = [-5.65, 15.5, 27.3, 36.6, 51.9];
 
-// Default camera matrix (derived from MultiMatrix.npz)
+// Default (uncalibrated) focal length in pixels at 1280x720.
+// ~895px ≈ 71° horizontal FOV, close to typical 1080p webcams such as the Logitech C920/C922 (70.4° hFOV).
+// The principal point defaults to the image centre. Run the in-app camera calibration for real values.
+// (The old values here came from MultiMatrix.npz, a calibration of an unknown camera at a different
+// resolution, so they have been replaced with these neutral defaults.)
+export const DEFAULT_FOCAL_PX_720P = 895.0;
 export const DEFAULT_CAM_MATRIX = [
-  895.35076989, 0, 248.37585485,
-  0, 892.32692372, 140.3891681,
+  DEFAULT_FOCAL_PX_720P, 0, 640,
+  0, DEFAULT_FOCAL_PX_720P, 360,
   0, 0, 1.0
 ];
 
-// Default distortion coefficients
-export const DEFAULT_DIST_COEF = [
-  0.03825588, 0.14136728, -0.01338866, -0.00669156, -1.08208082
-];
+// Default distortion: none. Applying another camera's distortion profile is worse than applying none;
+// webcam distortion is mild, and a proper per-camera calibration replaces these zeros.
+export const DEFAULT_DIST_COEF = [0, 0, 0, 0, 0];
 
 /**
- * Initialize camera matrices in OpenCV.js, scaled proportionally to stream resolution
+ * Initialize camera matrices in OpenCV.js for the given stream resolution.
+ * @param {object} cv - OpenCV instance
+ * @param {number} width - Stream width in px
+ * @param {number} height - Stream height in px
+ * @param {object|null} [calib] - Calibration already scaled to this resolution
+ *   ({ fx, fy, cx, cy, dist }, see camera_calibration.scaleCalibration). Falls back to defaults.
+ * @returns {{ camMatrix, distCoef, distArr: number[], isCalibrated: boolean }}
  */
-export function createCameraMats(cv, width = 640, height = 480) {
-  const sx = width / 640.0;
-  const sy = height / 480.0;
-  const scaledMatrix = [
-    DEFAULT_CAM_MATRIX[0] * sx, 0, DEFAULT_CAM_MATRIX[2] * sx,
-    0, DEFAULT_CAM_MATRIX[4] * sy, DEFAULT_CAM_MATRIX[5] * sy,
+export function createCameraMats(cv, width = 1280, height = 720, calib = null) {
+  let fx, fy, cx, cy, distArr;
+  if (calib) {
+    ({ fx, fy, cx, cy } = calib);
+    distArr = calib.dist.slice(0, 5);
+  } else {
+    // Scale by height so pixels stay square; narrower aspect ratios (e.g. 4:3) are a centre crop of the sensor
+    const s = height / 720.0;
+    fx = DEFAULT_FOCAL_PX_720P * s;
+    fy = DEFAULT_FOCAL_PX_720P * s;
+    cx = width / 2.0;
+    cy = height / 2.0;
+    distArr = DEFAULT_DIST_COEF.slice();
+  }
+  const camMatrix = cv.matFromArray(3, 3, cv.CV_64F, [
+    fx, 0, cx,
+    0, fy, cy,
     0, 0, 1.0
-  ];
-  let camMatrix = cv.matFromArray(3, 3, cv.CV_64F, scaledMatrix);
-  let distCoef = cv.matFromArray(1, 5, cv.CV_64F, DEFAULT_DIST_COEF);
-  return { camMatrix, distCoef };
+  ]);
+  const distCoef = cv.matFromArray(1, 5, cv.CV_64F, distArr);
+  return { camMatrix, distCoef, distArr, isCalibrated: !!calib };
 }
 
-let cachedMarkerPoints = null;
+const markerPointsCache = {};
+
+function getMarkerPoints(cv, markerSideCm) {
+  if (!markerPointsCache[markerSideCm]) {
+    const half = markerSideCm / 2.0;
+    markerPointsCache[markerSideCm] = cv.matFromArray(4, 3, cv.CV_32F, [
+      -half,  half, 0.0,
+       half,  half, 0.0,
+       half, -half, 0.0,
+      -half, -half, 0.0
+    ]);
+  }
+  return markerPointsCache[markerSideCm];
+}
 
 /**
  * Solve camera pose (3D position/rotation) of a marker using solvePnP
+ * @param {object} cv - OpenCV instance
+ * @param {Array} corners - 4 pixel corners
+ * @param {object} camMatrix - Camera intrinsic matrix
+ * @param {object} distCoef - Distortion coefficients
+ * @param {number} [markerSideCm=3.1] - Physical square side length in cm (default 3.1cm)
  * @returns {object|null} { rvec, tvec } in camera space
  */
-export function solvePose(cv, corners, camMatrix, distCoef) {
-  if (!cachedMarkerPoints) {
-    cachedMarkerPoints = cv.matFromArray(4, 3, cv.CV_32F, [
-      -4.0, 4.0, 0.0,
-      4.0, 4.0, 0.0,
-      4.0, -4.0, 0.0,
-      -4.0, -4.0, 0.0
-    ]);
-  }
+export function solvePose(cv, corners, camMatrix, distCoef, markerSideCm = 3.1) {
+  const markerPoints = getMarkerPoints(cv, markerSideCm);
 
   let imagePoints = cv.matFromArray(4, 1, cv.CV_32FC2, [
     corners[0].x, corners[0].y,
@@ -75,7 +106,7 @@ export function solvePose(cv, corners, camMatrix, distCoef) {
 
   let method = cv.SOLVEPNP_IPPE_SQUARE !== undefined ? cv.SOLVEPNP_IPPE_SQUARE : (cv.SOLVEPNP_ITERATIVE || 0);
 
-  let success = cv.solvePnP(cachedMarkerPoints, imagePoints, camMatrix, distCoef, rvec, tvec, false, method);
+  let success = cv.solvePnP(markerPoints, imagePoints, camMatrix, distCoef, rvec, tvec, false, method);
 
   imagePoints.delete();
 
