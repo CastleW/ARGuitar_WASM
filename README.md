@@ -14,9 +14,25 @@ You'll need to print out the PDF file and make your own AR Guitar to use with th
 
 The App is deployed to: https://ar-guitar-wasm.vercel.app/
 
+## 🖨️ Building Your AR Guitar Neck (Printable Kit)
+
+To play ARGuitar, you can build your own physical practice neck in about 15 minutes using card or wood:
+
+1. **Download the Printable Templates**:
+   - 📄 [**Printable Neck PDF (1:1 Scale)**](public/neck/arguitar_neck_printable.pdf) — Complete 4-page kit (Guide + 3 sheets).
+   - 🌐 [**Interactive Print Page**](public/neck/index.html) — Open in your browser with direct 1:1 print button.
+   - 📐 [**Continuous Full Scale SVG (67cm)**](public/neck/arguitar_neck_full_scale.svg) — Single-piece template for laser cutters or large-format printing.
+2. **Print at 100% Scale**:
+   - Set your printer dialog to **"Actual Size" / 100% Scale** (do NOT use "Fit to Page").
+   - Measure the **blue 50 mm test box** on each page with a ruler to verify exact scale.
+3. **Trim & Join Overlaps**:
+   - Cut along the red dashed lines on Sheets 2 and 3.
+   - Align the crosshair targets `⨁` over the shaded overlap tabs of the previous sheet and tape or glue them together.
+4. **Mount**:
+   - Stick the continuous 64 cm strip onto a piece of wood molding (~45–46 mm wide), heavy corrugated card, or a ruler/yardstick.
 
 - **True AR Experience**: Place augmented reality guitar fret markers directly on your physical guitar neck using your webcam
-- **Marker-Based Detection**: Use ArUco markers on the fretboard and headstock for precise positioning and tracking
+- **Marker-Based Detection**: Uses 5 strategically calibrated ArUco markers (Headstock, Fret 5, Frets 9-10, Frets 14-15, and Strum Zone) with projective perspective mapping
 - **AI Chord Recognition**: AI analyzes marker positions to identify chord shapes and finger placements
 - **Real-Time Feedback**: Get instant visual feedback on correct/incorrect finger positions and strumming
 - **Integrated Lesson**: Combines guitar tracking, chord detection, and lesson content into a single AR interface
@@ -24,11 +40,10 @@ The App is deployed to: https://ar-guitar-wasm.vercel.app/
 ## 🚀 Key Features
 
 ### 🎸 Guitar Tracking System
-- **ArUco Marker Tracking**: Detects specially designed ArUco markers placed on each fret of the guitar neck
-- **Fretboard Mapping**: Accurately maps 12 frets plus headstock markers to virtual 3D guitar neck coordinates
-- **Pose Estimation**: Computes 3D position and orientation of the guitar in space for realistic AR overlay
-- **Multi-Marker Support**: Detects all 23 markers (12 frets + 11 headstock) for complete tracking
-- **HD Camera Support**: Optimized for 1080p video capture with real-time processing
+- **ArUco Marker Tracking**: Detects specially designed 5x5 ArUco markers on the headstock, frets, and body
+- **Fretboard Mapping**: Accurately maps 22 frets using a true Fender 25.5" (64.8 cm) scale length
+- **Pose Estimation**: Computes 3D position, depth ratio, and orientation of the guitar in space for realistic AR overlay
+- **HD Camera Support**: Optimized for 720p and 1080p video capture with real-time processing
 
 ### 🤖 AI Chord Detection Engine
 - **Multi-Finger Analysis**: Tracks all 5 fretting fingers (thumb, index, middle, ring, pinky)
