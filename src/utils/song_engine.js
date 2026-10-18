@@ -214,6 +214,7 @@ export const BUILT_IN_SONGS = [
     title: '4-Chord Pop Anthem',
     subtitle: "Don't Stop Strumming",
     genre: 'Pop / Rock',
+    recommendedTone: 'acoustic',
     bpm: 96,
     difficulty: 'Beginner',
     timeSignature: [4, 4],
@@ -227,9 +228,10 @@ export const BUILT_IN_SONGS = [
   },
   {
     id: 'stand-by-me',
-    title: 'Stand By Me',
+    title: 'Stand Beside Me',
     subtitle: 'Classic Soul Groove',
     genre: 'R&B / Soul',
+    recommendedTone: 'electric_clean',
     bpm: 110,
     difficulty: 'Intermediate',
     timeSignature: [4, 4],
@@ -247,9 +249,10 @@ export const BUILT_IN_SONGS = [
   },
   {
     id: 'knockin-heavens-door',
-    title: "Knockin' on Heaven's Door",
+    title: "Heaven's Gate",
     subtitle: 'Acoustic Folk Anthem',
     genre: 'Folk / Rock',
+    recommendedTone: 'acoustic',
     bpm: 72,
     difficulty: 'Beginner',
     timeSignature: [4, 4],
@@ -270,6 +273,7 @@ export const BUILT_IN_SONGS = [
     title: '12-Bar Blues in E',
     subtitle: 'Chicago Shuffle',
     genre: 'Blues / Rock',
+    recommendedTone: 'electric_clean',
     bpm: 94,
     difficulty: 'Intermediate',
     timeSignature: [4, 4],
@@ -292,8 +296,9 @@ export const BUILT_IN_SONGS = [
   {
     id: 'wonder-strum',
     title: 'Wonder Strum',
-    subtitle: '90s Oasis Vibe',
+    subtitle: '90s Britpop Acoustic',
     genre: 'Britpop / Acoustic',
+    recommendedTone: 'acoustic',
     bpm: 86,
     difficulty: 'Beginner',
     timeSignature: [4, 4],
@@ -303,6 +308,48 @@ export const BUILT_IN_SONGS = [
       { chord: 'G',  beats: 4, strumGuide: ['D', null, 'D', 'U', 'D', 'U', 'D', 'U'] },
       { chord: 'D',  beats: 4, strumGuide: ['D', null, 'D', 'U', 'D', 'U', 'D', 'U'] },
       { chord: 'A',  beats: 4, strumGuide: ['D', null, 'D', 'U', 'D', 'U', 'D', 'U'] }
+    ]
+  },
+  {
+    id: 'pacific-sunset',
+    title: 'Pacific Sunset',
+    subtitle: 'California Clean Strat Groove',
+    genre: 'Alt-Rock / Clean',
+    recommendedTone: 'electric_clean',
+    bpm: 96,
+    difficulty: 'Intermediate',
+    timeSignature: [4, 4],
+    description: 'Sparkling clean Strat progression moving through Am, F, C, G, and Dm.',
+    measures: [
+      { chord: 'Am', beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', null, 'U'] },
+      { chord: 'F',  beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', null, 'U'] },
+      { chord: 'Am', beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', null, 'U'] },
+      { chord: 'F',  beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', null, 'U'] },
+      { chord: 'C',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] },
+      { chord: 'G',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] },
+      { chord: 'F',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] },
+      { chord: 'Dm', beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] }
+    ]
+  },
+  {
+    id: 'midnight-highway',
+    title: 'Midnight Highway',
+    subtitle: 'High-Voltage Rock Riff',
+    genre: 'Hard Rock / Crunch',
+    recommendedTone: 'distortion',
+    bpm: 116,
+    difficulty: 'Beginner',
+    timeSignature: [4, 4],
+    description: 'Hard-hitting distorted power downstrokes on A, D, and G with classic rock crunch.',
+    measures: [
+      { chord: 'A', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, null, null] },
+      { chord: 'D', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, 'D', null] },
+      { chord: 'G', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, null, null] },
+      { chord: 'D', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, 'D', null] },
+      { chord: 'A', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, null, null] },
+      { chord: 'D', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, 'D', null] },
+      { chord: 'G', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, null, null] },
+      { chord: 'A', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, null, null] }
     ]
   }
 ];

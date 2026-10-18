@@ -110,11 +110,14 @@ export default function SongStudioPanel() {
             outline: 'none'
           }}
         >
-          {BUILT_IN_SONGS.map(s => (
-            <option key={s.id} value={s.id} style={{ background: '#0f172a', color: '#fff' }}>
-              {s.title} — {s.genre} ({s.bpm} BPM)
-            </option>
-          ))}
+          {BUILT_IN_SONGS.map(s => {
+            const toneEmoji = s.recommendedTone === 'distortion' ? '🔥' : (s.recommendedTone === 'electric_clean' ? '⚡' : '🎸');
+            return (
+              <option key={s.id} value={s.id} style={{ background: '#0f172a', color: '#fff' }}>
+                {toneEmoji} {s.title} — {s.genre} ({s.bpm} BPM)
+              </option>
+            );
+          })}
         </select>
         <span style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: '1.4' }}>
           {song.description}

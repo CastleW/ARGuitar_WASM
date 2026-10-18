@@ -183,11 +183,14 @@ export default function SongHighway({
                   fontWeight: '600'
                 }}
               >
-                {BUILT_IN_SONGS.map(s => (
-                  <option key={s.id} value={s.id} style={{ background: '#0f172a', color: '#fff' }}>
-                    {s.title} ({s.bpm} BPM)
-                  </option>
-                ))}
+                {BUILT_IN_SONGS.map(s => {
+                  const toneEmoji = s.recommendedTone === 'distortion' ? '🔥' : (s.recommendedTone === 'electric_clean' ? '⚡' : '🎸');
+                  return (
+                    <option key={s.id} value={s.id} style={{ background: '#0f172a', color: '#fff' }}>
+                      {toneEmoji} {s.title} ({s.bpm} BPM)
+                    </option>
+                  );
+                })}
               </select>
               <ChevronDown size={12} style={{ position: 'absolute', right: '8px', color: 'var(--text-muted)', pointerEvents: 'none' }} />
             </div>

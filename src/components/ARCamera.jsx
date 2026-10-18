@@ -228,16 +228,6 @@ export default function ARCamera({
     songEngine.setPlayLevel(playLevel);
   }, [playLevel]);
 
-  // Sync playLevel with external songEngine events
-  useEffect(() => {
-    const unsubscribe = songEngine.subscribe((eventType, payload) => {
-      if (eventType === 'levelChange') {
-        setPlayLevel(payload.level);
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
   // Guitar Sound Instrument: 'acoustic', 'electric_clean', 'distortion'
   const [guitarInstrument, setGuitarInstrument] = useState(() => {
     return guitarAudio.currentInstrument || 'acoustic';
@@ -246,6 +236,27 @@ export default function ARCamera({
     setGuitarInstrument(instId);
     await guitarAudio.setInstrument(instId);
   };
+
+  // Palm Mute (tight staccato decay + dampening)
+  const [isPalmMuted, setIsPalmMuted] = useState(() => guitarAudio.isPalmMuted);
+  useEffect(() => {
+    guitarAudio.onPalmMuteChange = (muted) => setIsPalmMuted(muted);
+    return () => {
+      guitarAudio.onPalmMuteChange = null;
+    };
+  }, []);
+
+  // Sync playLevel and recommendedTone with external songEngine events
+  useEffect(() => {
+    const unsubscribe = songEngine.subscribe((eventType, payload) => {
+      if (eventType === 'levelChange') {
+        setPlayLevel(payload.level);
+      } else if (eventType === 'songChange' && payload.song?.recommendedTone) {
+        handleInstrumentChange(payload.song.recommendedTone);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   // Camera capture resolution: '720p' (default), '480p', '1080p'
   const [captureResolution, setCaptureResolution] = useState(() => {
@@ -3979,6 +3990,31 @@ export default function ARCamera({
                     </option>
                   ))}
                 </select>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = guitarAudio.togglePalmMute();
+                    setIsPalmMuted(next);
+                  }}
+                  style={{
+                    padding: '3px 8px',
+                    fontSize: '11px',
+                    borderRadius: '5px',
+                    border: isPalmMuted ? '1px solid #ef4444' : '1px solid rgba(255, 255, 255, 0.15)',
+                    background: isPalmMuted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(255, 255, 255, 0.06)',
+                    color: isPalmMuted ? '#f87171' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    fontFamily: 'var(--font-mono)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                  title="Palm Mute: Damps string vibrations for punchy staccato rhythm / rock chugging"
+                >
+                  <span>✋</span>
+                  <span>{isPalmMuted ? 'Palm Mute ON' : 'Palm Mute'}</span>
+                </button>
               </div>
 
               {/* Dual-Camera (Stereo 3D) Depth Mode Selector */}
@@ -4487,6 +4523,32 @@ export default function ARCamera({
               <span>{GUITAR_INSTRUMENTS[guitarInstrument]?.icon || '🎸'}</span>
               <span style={{ fontFamily: 'var(--font-mono)', color: GUITAR_INSTRUMENTS[guitarInstrument]?.color }}>
                 {GUITAR_INSTRUMENTS[guitarInstrument]?.badge || 'Acoustic'}
+              </span>
+            </button>
+
+            {/* Palm Mute (Damping) Toggle */}
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                const next = guitarAudio.togglePalmMute();
+                setIsPalmMuted(next);
+                if (addLog) addLog(next ? "✋ Palm Mute ON: Tight staccato chugging" : "✋ Palm Mute OFF: Open sustain");
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '6px 10px',
+                fontSize: '12px',
+                background: isPalmMuted ? 'rgba(239, 68, 68, 0.22)' : 'rgba(255, 255, 255, 0.05)',
+                borderColor: isPalmMuted ? '#ef4444' : 'rgba(255, 255, 255, 0.15)'
+              }}
+              title={isPalmMuted ? "Palm Mute ON (Click to play open sustain)" : "Palm Mute OFF (Click for tight staccato rock/metal chugging)"}
+            >
+              <span>✋</span>
+              <span style={{ fontFamily: 'var(--font-mono)', color: isPalmMuted ? '#f87171' : 'var(--text-secondary)' }}>
+                {isPalmMuted ? 'Muted' : 'Open'}
               </span>
             </button>
 

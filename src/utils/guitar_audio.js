@@ -50,7 +50,9 @@ export const GUITAR_INSTRUMENTS = {
     key: 'acoustic_guitar_steel',
     badge: 'Acoustic Steel',
     color: '#f59e0b',
-    eq: { lowFreq: 140, lowGain: 3.5, midFreq: 1200, midGain: 1.5, highFreq: 6500, highGain: -3.0 }
+    eq: { lowFreq: 140, lowGain: 3.5, midFreq: 1200, midGain: 1.5, highFreq: 6500, highGain: -3.0 },
+    sustainSec: 3.2,
+    releaseSec: 0.35
   },
   electric_clean: {
     id: 'electric_clean',
@@ -60,7 +62,9 @@ export const GUITAR_INSTRUMENTS = {
     key: 'electric_guitar_clean',
     badge: 'Electric Clean',
     color: '#06b6d4',
-    eq: { lowFreq: 110, lowGain: 1.5, midFreq: 2600, midGain: 3.5, highFreq: 7500, highGain: 1.0 }
+    eq: { lowFreq: 110, lowGain: 1.5, midFreq: 2600, midGain: 3.5, highFreq: 7500, highGain: 1.0 },
+    sustainSec: 1.8,
+    releaseSec: 0.18
   },
   distortion: {
     id: 'distortion',
@@ -70,7 +74,9 @@ export const GUITAR_INSTRUMENTS = {
     key: 'distortion_guitar',
     badge: 'Electric Rock',
     color: '#ef4444',
-    eq: { lowFreq: 180, lowGain: 4.0, midFreq: 1600, midGain: 4.5, highFreq: 5000, highGain: -4.0 }
+    eq: { lowFreq: 180, lowGain: 4.0, midFreq: 1600, midGain: 4.5, highFreq: 5000, highGain: -4.0 },
+    sustainSec: 1.15,
+    releaseSec: 0.14
   }
 };
 
@@ -84,6 +90,13 @@ class GuitarAudioEngine {
     this.reverbNode = null;
     this.isMuted = false;
     this.volume = 0.85;
+
+    // Palm Mute: tight staccato envelope and darkened high-end harmonics
+    this.isPalmMuted = false;
+    this.onPalmMuteChange = null;
+
+    // Monophonic per-string voice tracking: Map<stringNum (1..6), { source, voiceGain, stopTime }>
+    this.activeVoices = new Map();
 
     let savedInst = 'acoustic';
     try {
@@ -344,10 +357,47 @@ class GuitarAudioEngine {
     }
   }
 
+  setPalmMuted(muted) {
+    this.isPalmMuted = !!muted;
+    if (this.onPalmMuteChange) {
+      this.onPalmMuteChange(this.isPalmMuted);
+    }
+    return this.isPalmMuted;
+  }
+
+  togglePalmMute() {
+    return this.setPalmMuted(!this.isPalmMuted);
+  }
+
   /**
-   * Play a real studio-recorded guitar sample
+   * Choke vibrating note on a given string with a smooth 20ms micro-fade
+   * Prevents two notes from unnaturally ringing simultaneously on the same string.
    */
-  playSampleNote(audioBuffer, velocity, now, instrumentId = 'acoustic') {
+  chokeStringVoice(stringNum, now) {
+    const active = this.activeVoices.get(stringNum);
+    if (!active) return;
+    try {
+      const chokeDuration = 0.022; // 22ms gentle damping avoids clicks/pops
+      active.voiceGain.gain.cancelScheduledValues(now);
+      active.voiceGain.gain.setValueAtTime(active.voiceGain.gain.value, now);
+      active.voiceGain.gain.setTargetAtTime(0.0001, now, 0.006);
+      if (active.source?.stop) {
+        active.source.stop(now + chokeDuration + 0.015);
+      }
+    } catch {
+      // ignore if already finished
+    } finally {
+      this.activeVoices.delete(stringNum);
+    }
+  }
+
+  /**
+   * Play a real studio-recorded guitar sample with tailored envelope & damping
+   */
+  playSampleNote(audioBuffer, velocity, now, instrumentId = 'acoustic', stringNum = 1) {
+    // Choke any existing note ringing on this specific string
+    this.chokeStringVoice(stringNum, now);
+
     const source = this.ctx.createBufferSource();
     source.buffer = audioBuffer;
 
@@ -362,19 +412,59 @@ class GuitarAudioEngine {
       peakVolume = clampedVelocity * 0.85; // higher harmonic density, lower peak to avoid clipping
     }
 
-    voiceGain.gain.setValueAtTime(peakVolume, now);
+    const instConfig = GUITAR_INSTRUMENTS[instrumentId] || GUITAR_INSTRUMENTS.acoustic;
+    let sustainSec = instConfig.sustainSec || 3.0;
+    let releaseSec = instConfig.releaseSec || 0.25;
 
-    source.connect(voiceGain);
+    let palmFilter = null;
+    if (this.isPalmMuted) {
+      // Palm Mute: tight staccato envelope and darkened high-end harmonics
+      sustainSec = 0.28;
+      releaseSec = 0.06;
+      peakVolume *= 0.88;
+
+      palmFilter = this.ctx.createBiquadFilter();
+      palmFilter.type = 'lowpass';
+      palmFilter.frequency.setValueAtTime(1600, now);
+      palmFilter.Q.setValueAtTime(1.1, now);
+    }
+
+    // ADSR Envelope:
+    // 1. Attack: 3ms linear ramp to prevent clicking
+    voiceGain.gain.setValueAtTime(0.0001, now);
+    voiceGain.gain.linearRampToValueAtTime(peakVolume, now + 0.003);
+
+    // 2. Sustain: natural decay slope down to sustain floor
+    const sustainEndTime = now + sustainSec;
+    const sustainFloor = peakVolume * (this.isPalmMuted ? 0.35 : 0.60);
+    voiceGain.gain.exponentialRampToValueAtTime(sustainFloor, sustainEndTime);
+
+    // 3. Release: smooth exponential cutoff
+    const stopTime = sustainEndTime + releaseSec;
+    voiceGain.gain.exponentialRampToValueAtTime(0.0001, stopTime);
+
+    // Connect node chain: source -> (optional palmFilter) -> voiceGain -> masterGain
+    if (palmFilter) {
+      source.connect(palmFilter);
+      palmFilter.connect(voiceGain);
+    } else {
+      source.connect(voiceGain);
+    }
     voiceGain.connect(this.masterGain);
 
     source.start(now);
+    source.stop(stopTime + 0.05);
+
+    this.activeVoices.set(stringNum, { source, voiceGain, stopTime });
     return voiceGain;
   }
 
   /**
    * High-quality warm physical modeling synthesis (instant fallback)
    */
-  playSynthesizedNote(freq, velocity, now, stringNum) {
+  playSynthesizedNote(freq, velocity, now, stringNum, instrumentId = 'acoustic') {
+    this.chokeStringVoice(stringNum, now);
+
     const sampleRate = this.ctx.sampleRate;
     const periodSamples = Math.round(sampleRate / freq);
     const burstDuration = Math.max(0.004, (periodSamples / sampleRate) * 1.5);
@@ -385,7 +475,6 @@ class GuitarAudioEngine {
     let prev = 0;
     for (let i = 0; i < output.length; i++) {
       const white = Math.random() * 2 - 1;
-      // One-pole smoothing to eliminate harsh digital "tinny" frequencies
       const smoothed = prev * 0.65 + white * 0.35;
       prev = smoothed;
       output[i] = smoothed * Math.exp(-i / (output.length * 0.35));
@@ -400,18 +489,20 @@ class GuitarAudioEngine {
     // Damping filter inside the feedback loop
     const dampingFilter = this.ctx.createBiquadFilter();
     dampingFilter.type = 'lowpass';
-    const cutoff = 1600 + (7 - stringNum) * 450;
+    const cutoff = (this.isPalmMuted ? 1100 : 1600) + (7 - stringNum) * (this.isPalmMuted ? 200 : 450);
     dampingFilter.frequency.setValueAtTime(cutoff, now);
     dampingFilter.Q.setValueAtTime(1.2, now);
 
     const feedbackGain = this.ctx.createGain();
-    feedbackGain.gain.setValueAtTime(0.988, now);
+    const instConfig = GUITAR_INSTRUMENTS[instrumentId] || GUITAR_INSTRUMENTS.acoustic;
+    const sustainSec = this.isPalmMuted ? 0.30 : (instConfig.sustainSec || 2.5);
+    feedbackGain.gain.setValueAtTime(this.isPalmMuted ? 0.88 : 0.988, now);
 
     const voiceGain = this.ctx.createGain();
-    const peakVolume = Math.max(0.2, Math.min(1.0, velocity)) * 0.8;
+    const peakVolume = Math.max(0.2, Math.min(1.0, velocity)) * (this.isPalmMuted ? 0.7 : 0.8);
     voiceGain.gain.setValueAtTime(0, now);
     voiceGain.gain.linearRampToValueAtTime(peakVolume, now + 0.003);
-    voiceGain.gain.exponentialRampToValueAtTime(0.001, now + 2.5);
+    voiceGain.gain.exponentialRampToValueAtTime(0.001, now + sustainSec);
 
     noiseSource.connect(voiceGain);
     voiceGain.connect(this.masterGain);
@@ -424,6 +515,7 @@ class GuitarAudioEngine {
     noiseSource.start(now);
     noiseSource.stop(now + burstDuration);
 
+    this.activeVoices.set(stringNum, { source: noiseSource, voiceGain, stopTime: now + sustainSec });
     return voiceGain;
   }
 
@@ -461,11 +553,11 @@ class GuitarAudioEngine {
     }
 
     if (audioBuffer) {
-      // Play real studio-recorded guitar note
-      this.playSampleNote(audioBuffer, velocity, now, instId);
+      // Play real studio-recorded guitar note with envelope & string choking
+      this.playSampleNote(audioBuffer, velocity, now, instId, stringNum);
     } else {
       // Warm physical modeling fallback
-      this.playSynthesizedNote(freq, velocity, now, stringNum);
+      this.playSynthesizedNote(freq, velocity, now, stringNum, instId);
     }
   }
 
