@@ -555,7 +555,7 @@ export default function ARCamera({
   const coastFramesRef = useRef(0);
 
   // ---- ArUco Session Recorder handlers ----
-  const handleStartRecording = ({ label, recordOverlay }) => {
+  const handleStartRecording = async ({ label, recordOverlay, recordAudio = false, recordMic = false }) => {
     setRecError(null);
     const video = videoRef.current;
     const stream = video?.srcObject;
@@ -598,13 +598,43 @@ export default function ARCamera({
       detector: DETECTOR_CONFIG,
       coordinateNotes: 'markers[].c, neck points and fingers are full-resolution video pixels (un-mirrored). cands[].c are processing-canvas pixels: multiply by proc.sx / proc.sy for video pixels.'
     };
+    // Optional audio: app output (song + strummed notes) and/or microphone voice-over
+    let audioHandle = null;
+    let micNotice = null;
+    if (recordAudio || recordMic) {
+      let micStream = null;
+      if (recordMic) {
+        try {
+          micStream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+            video: false
+          });
+        } catch (e) {
+          micNotice = `Microphone unavailable (${e.name || e.message}); recording without voice.`;
+        }
+      }
+      try {
+        audioHandle = await guitarAudio.startRecordingAudio(micStream, !!recordAudio);
+      } catch (e) {
+        micStream?.getTracks().forEach(t => t.stop());
+        micNotice = `Audio capture failed (${e.message}); recording video only.`;
+      }
+    }
+
     try {
-      recorder.start({ stream, meta, label, recordOverlay, width, height });
+      recorder.start({
+        stream, meta, label, recordOverlay, width, height,
+        audioStream: audioHandle?.stream || null,
+        onStopAudio: audioHandle?.stop || null,
+        audioInfo: audioHandle ? { app: !!recordAudio, mic: !!recordMic && !micNotice } : null
+      });
       setRecResult(null);
       setRecLiveStats(recorder.liveStats());
       setRecState('recording');
-      if (addLog) addLog(`⏺️ Recording started: ${recorder.name}`);
+      if (micNotice) setRecError(micNotice);
+      if (addLog) addLog(`⏺️ Recording started: ${recorder.name}${audioHandle ? ' (with audio)' : ''}`);
     } catch (e) {
+      audioHandle?.stop();
       setRecError(e.message);
     }
   };

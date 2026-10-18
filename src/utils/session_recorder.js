@@ -42,6 +42,22 @@ function extForMime(mime) {
   return mime && mime.includes('mp4') ? 'mp4' : 'webm';
 }
 
+/** When a recording carries audio, name an explicit audio codec if the browser supports it. */
+function withAudioCodec(mime) {
+  if (!mime) return mime;
+  try {
+    const candidates = mime.includes('mp4')
+      ? [`${mime},mp4a.40.2`]
+      : [`${mime},opus`];
+    for (const c of candidates) {
+      if (MediaRecorder.isTypeSupported(c)) return c;
+    }
+  } catch {
+    // fall through to the plain mime
+  }
+  return mime;
+}
+
 function pad(n) {
   return String(n).padStart(2, '0');
 }
@@ -313,6 +329,8 @@ export class SessionRecorder {
     this.overlayCanvas = null;
     this.overlayCtx = null;
     this.overlayStream = null;
+    this.audioStop = null;
+    this.audioInfo = null;
     this.t0 = 0;
     this.videoStartDelayMs = null;
     this.name = '';
@@ -340,8 +358,12 @@ export class SessionRecorder {
    * @param {string} [opts.label] - Free-text scenario label (lighting, distance...)
    * @param {boolean} [opts.recordOverlay] - Also record a composited camera+overlay video
    * @param {number} [opts.width] / [opts.height] - Video dimensions (for the overlay compositor)
+   * @param {MediaStream} [opts.audioStream] - Audio to embed (app output and/or microphone). Goes into the
+   *   overlay video when recordOverlay is on (the shareable one), otherwise into the raw video.
+   * @param {Function} [opts.onStopAudio] - Cleanup callback invoked after recording stops
+   * @param {object} [opts.audioInfo] - Description written to the metrics header, e.g. { app: true, mic: false }
    */
-  start({ stream, meta, label = '', recordOverlay = false, width = 1280, height = 720 }) {
+  start({ stream, meta, label = '', recordOverlay = false, width = 1280, height = 720, audioStream = null, onStopAudio = null, audioInfo = null }) {
     if (this.state !== 'idle') throw new Error(`Recorder busy (${this.state})`);
     if (!stream) throw new Error('No camera stream to record');
     const mime = pickMimeType();
@@ -357,9 +379,21 @@ export class SessionRecorder {
     // High bitrate: compression artefacts would blur marker bits and bias offline replay results
     const pixels = width * height;
     const videoBitsPerSecond = pixels >= 1920 * 1080 ? 16_000_000 : 10_000_000;
-    const recOpts = mime ? { mimeType: mime, videoBitsPerSecond } : { videoBitsPerSecond };
+    const audioTracks = audioStream ? audioStream.getAudioTracks() : [];
+    const hasAudio = audioTracks.length > 0;
+    this.audioStop = onStopAudio;
+    this.audioInfo = hasAudio ? audioInfo : null;
+    const audioOnRaw = hasAudio && !recordOverlay;
 
-    this.rawRecorder = new MediaRecorder(stream, recOpts);
+    const rawMime = audioOnRaw ? withAudioCodec(mime) : mime;
+    const rawOpts = rawMime ? { mimeType: rawMime, videoBitsPerSecond } : { videoBitsPerSecond };
+    if (audioOnRaw) rawOpts.audioBitsPerSecond = 192_000;
+    // Wrap tracks in a new MediaStream so the live camera stream is never modified
+    const rawStream = audioOnRaw
+      ? new MediaStream([...stream.getVideoTracks(), ...audioTracks])
+      : stream;
+
+    this.rawRecorder = new MediaRecorder(rawStream, rawOpts);
     this.rawRecorder.ondataavailable = (e) => {
       if (e.data && e.data.size > 0) this.rawChunks.push(e.data);
     };
@@ -370,10 +404,15 @@ export class SessionRecorder {
       this.overlayCanvas.height = height;
       this.overlayCtx = this.overlayCanvas.getContext('2d');
       this.overlayStream = this.overlayCanvas.captureStream(30);
-      this.overlayRecorder = new MediaRecorder(
-        this.overlayStream,
-        mime ? { mimeType: mime, videoBitsPerSecond: 6_000_000 } : { videoBitsPerSecond: 6_000_000 }
-      );
+      const overlayMime = hasAudio ? withAudioCodec(mime) : mime;
+      const overlayOpts = overlayMime
+        ? { mimeType: overlayMime, videoBitsPerSecond: 6_000_000 }
+        : { videoBitsPerSecond: 6_000_000 };
+      if (hasAudio) overlayOpts.audioBitsPerSecond = 192_000;
+      const overlayRecStream = hasAudio
+        ? new MediaStream([...this.overlayStream.getVideoTracks(), ...audioTracks])
+        : this.overlayStream;
+      this.overlayRecorder = new MediaRecorder(overlayRecStream, overlayOpts);
       this.overlayRecorder.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) this.overlayChunks.push(e.data);
       };
@@ -389,6 +428,9 @@ export class SessionRecorder {
       videoFile: `${this.name}.${extForMime(mime)}`,
       overlayFile: recordOverlay ? `${this.name}_overlay.${extForMime(mime)}` : null,
       videoBitsPerSecond,
+      audio: this.audioInfo
+        ? { ...this.audioInfo, embeddedIn: recordOverlay ? 'overlay' : 'raw' }
+        : null,
       ...meta
     };
 
@@ -456,6 +498,10 @@ export class SessionRecorder {
     await Promise.all([stopRecorder(this.rawRecorder), stopRecorder(this.overlayRecorder)]);
     if (this.overlayStream) {
       this.overlayStream.getTracks().forEach(t => t.stop());
+    }
+    if (this.audioStop) {
+      try { this.audioStop(); } catch { /* ignore */ }
+      this.audioStop = null;
     }
 
     const summary = {

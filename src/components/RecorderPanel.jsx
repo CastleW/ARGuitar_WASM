@@ -177,13 +177,17 @@ export default function RecorderPanel({
 }) {
   const [label, setLabel] = useState(() => localStorage.getItem('arguitar_rec_label') || '');
   const [recordOverlay, setRecordOverlay] = useState(() => localStorage.getItem('arguitar_rec_overlay') === 'true');
+  const [recordAudio, setRecordAudio] = useState(() => localStorage.getItem('arguitar_rec_audio') === 'true');
+  const [recordMic, setRecordMic] = useState(() => localStorage.getItem('arguitar_rec_mic') === 'true');
   const [note, setNote] = useState('');
   const [lastMark, setLastMark] = useState(null);
 
   const handleStart = () => {
     localStorage.setItem('arguitar_rec_label', label);
     localStorage.setItem('arguitar_rec_overlay', recordOverlay ? 'true' : 'false');
-    onStart({ label: label.trim(), recordOverlay });
+    localStorage.setItem('arguitar_rec_audio', recordAudio ? 'true' : 'false');
+    localStorage.setItem('arguitar_rec_mic', recordMic ? 'true' : 'false');
+    onStart({ label: label.trim(), recordOverlay, recordAudio, recordMic });
   };
 
   const handleMark = () => {
@@ -267,6 +271,30 @@ export default function RecorderPanel({
             />
             Also record AR overlay video (extra CPU; shows what you saw)
           </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#cbd5e1', cursor: 'pointer' }}>
+            <input
+              id="rec-audio-toggle"
+              type="checkbox"
+              checked={recordAudio}
+              onChange={(e) => setRecordAudio(e.target.checked)}
+            />
+            Record audio: background song + notes you strum
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#cbd5e1', cursor: 'pointer' }}>
+            <input
+              id="rec-mic-toggle"
+              type="checkbox"
+              checked={recordMic}
+              onChange={(e) => setRecordMic(e.target.checked)}
+            />
+            Record my voice (microphone)
+          </label>
+          {(recordAudio || recordMic) && (
+            <div style={{ color: '#64748b', fontSize: '10px', lineHeight: 1.4 }}>
+              Audio is embedded in the overlay video if that is ticked, otherwise in the raw video.
+              {recordAudio && recordMic ? ' Use headphones so the song is not picked up twice by the microphone.' : ''}
+            </div>
+          )}
           <button
             id="rec-start-btn"
             type="button"

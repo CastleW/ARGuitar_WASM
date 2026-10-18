@@ -158,6 +158,46 @@ class GuitarAudioEngine {
   }
 
   /**
+   * Tap everything the app plays (song backing + strummed notes, after the amp/EQ chain)
+   * into a MediaStream suitable for MediaRecorder. Optionally mixes in a microphone stream
+   * (voice-over). The mic goes ONLY to the recording, never to the speakers, so there is no feedback.
+   * Playback is unaffected; note that the master mute also silences the recording.
+   * @param {MediaStream|null} [micStream]
+   * @param {boolean} [includeApp=true] - Include the app's own output (song + strummed notes)
+   * @returns {Promise<{ stream: MediaStream, stop: () => void }|null>}
+   */
+  async startRecordingAudio(micStream = null, includeApp = true) {
+    await this.ensureAudioContext();
+    if (!this.ctx || !this.bodyHigh) return null;
+
+    const dest = this.ctx.createMediaStreamDestination();
+    if (includeApp) this.bodyHigh.connect(dest);
+
+    let micSource = null;
+    let micGain = null;
+    if (micStream && micStream.getAudioTracks().length > 0) {
+      micSource = this.ctx.createMediaStreamSource(micStream);
+      micGain = this.ctx.createGain();
+      micGain.gain.value = 1.0;
+      micSource.connect(micGain);
+      micGain.connect(dest);
+    }
+
+    return {
+      stream: dest.stream,
+      stop: () => {
+        if (includeApp) {
+          try { this.bodyHigh.disconnect(dest); } catch { /* already disconnected */ }
+        }
+        try { micSource?.disconnect(); } catch { /* ignore */ }
+        try { micGain?.disconnect(); } catch { /* ignore */ }
+        dest.stream.getTracks().forEach(t => t.stop());
+        micStream?.getTracks().forEach(t => t.stop());
+      }
+    };
+  }
+
+  /**
    * Apply instrument-specific frequency shaping and tone profile
    */
   applyInstrumentEQ(instrumentId) {
