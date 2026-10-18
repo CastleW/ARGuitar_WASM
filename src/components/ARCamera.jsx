@@ -3889,6 +3889,29 @@ export default function ARCamera({
                 >
                   📐 Calibrate {calibStatus.cam1 ? '✓' : '·'}{stereoEnabled ? (calibStatus.cam2 ? '✓' : '·') : ''}
                 </button>
+                <a
+                  href="/neck/index.html"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '4px 8px',
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    borderRadius: '5px',
+                    border: '1px solid rgba(56, 189, 248, 0.4)',
+                    background: 'rgba(56, 189, 248, 0.1)',
+                    color: '#38bdf8',
+                    textDecoration: 'none',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap'
+                  }}
+                  title="Print your own physical AR Guitar practice neck (1:1 scale PDF / SVG template)"
+                >
+                  🎸 Print Neck
+                </a>
               </div>
 
               {/* Guitar Tone / Instrument Selector */}

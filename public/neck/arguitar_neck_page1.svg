@@ -1,0 +1,190 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 195" width="280mm" height="195mm" style="background:#ffffff; font-family:system-ui,-apple-system,sans-serif;">
+<defs>
+    <pattern id="overlapHatch" width="4" height="4" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
+      <line x1="0" y1="0" x2="0" y2="4" stroke="#e0e7ff" stroke-width="1.5" />
+    </pattern>
+  </defs>
+<!-- Page Header -->
+<rect x="10" y="8" width="260" height="32" rx="4" fill="#f8fafc" stroke="#cbd5e1" stroke-width="0.5"/>
+<text x="18" y="20" font-size="6.5" font-weight="800" fill="#0f172a">🎸 ARGuitar — Printable Practice Neck (1:1 Scale)</text>
+<text x="18" y="27.5" font-size="4" font-weight="600" fill="#0284c7">Headstock & Frets 0–5 (Nut, Marker 1 & Marker 2) · Sheet 1 of 3</text>
+<text x="18" y="34.5" font-size="3" fill="#64748b">Print at 100% (Actual Size). Mount on ~45-46mm wide wood strip, ruler, or heavy card.</text>
+<!-- Scale Verification Box -->
+<g transform="translate(202, 12)">
+  <rect x="0" y="0" width="66" height="24" rx="3" fill="#ffffff" stroke="#0284c7" stroke-width="0.8"/>
+  <text x="33" y="6" font-size="2.6" font-weight="bold" fill="#0369a1" text-anchor="middle">⚠️ SCALE CHECK: EXACTLY 50 mm</text>
+  <rect x="8" y="8" width="50" height="7" fill="#f0f9ff" stroke="#0284c7" stroke-width="0.6"/>
+  <line x1="8" y1="8" x2="8" y2="15" stroke="#0284c7" stroke-width="0.6"/>
+  <text x="8" y="19" font-size="2.4" font-family="monospace" fill="#0284c7" text-anchor="middle">0</text>
+  <line x1="18" y1="8" x2="18" y2="15" stroke="#0284c7" stroke-width="0.6"/>
+  <text x="18" y="19" font-size="2.4" font-family="monospace" fill="#0284c7" text-anchor="middle">1</text>
+  <line x1="28" y1="8" x2="28" y2="15" stroke="#0284c7" stroke-width="0.6"/>
+  <text x="28" y="19" font-size="2.4" font-family="monospace" fill="#0284c7" text-anchor="middle">2</text>
+  <line x1="38" y1="8" x2="38" y2="15" stroke="#0284c7" stroke-width="0.6"/>
+  <text x="38" y="19" font-size="2.4" font-family="monospace" fill="#0284c7" text-anchor="middle">3</text>
+  <line x1="48" y1="8" x2="48" y2="15" stroke="#0284c7" stroke-width="0.6"/>
+  <text x="48" y="19" font-size="2.4" font-family="monospace" fill="#0284c7" text-anchor="middle">4</text>
+  <line x1="58" y1="8" x2="58" y2="15" stroke="#0284c7" stroke-width="0.6"/>
+  <text x="58" y="19" font-size="2.4" font-family="monospace" fill="#0284c7" text-anchor="middle">5</text>
+  <text x="33" y="22.5" font-size="2.1" fill="#64748b" text-anchor="middle">Measure bar with ruler: 0 to 5 cm</text>
+</g>
+<!-- Main Neck Area -->
+<g transform="translate(87.50, 0)">
+  <rect x="-75" y="68" width="255" height="46" fill="#fdfbf7" stroke="#334155" stroke-width="0.8"/>
+  <!-- Right Overlap Tab -->
+  <rect x="160" y="68" width="20" height="46" fill="url(#overlapHatch)"/>
+  <line x1="170" y1="61" x2="170" y2="121" stroke="#ef4444" stroke-width="0.7" stroke-dasharray="2,2"/>
+  <text x="170" y="59.5" font-size="2.6" font-weight="bold" fill="#ef4444" text-anchor="middle">✂️ CUT / JOIN EDGE (170mm)</text>
+  <circle cx="170" cy="68" r="2" fill="none" stroke="#ef4444" stroke-width="0.6"/>
+  <line x1="167.5" y1="68" x2="172.5" y2="68" stroke="#ef4444" stroke-width="0.5"/>
+  <line x1="170" y1="65.5" x2="170" y2="70.5" stroke="#ef4444" stroke-width="0.5"/>
+  <circle cx="170" cy="114" r="2" fill="none" stroke="#ef4444" stroke-width="0.6"/>
+  <line x1="167.5" y1="114" x2="172.5" y2="114" stroke="#ef4444" stroke-width="0.5"/>
+  <line x1="170" y1="111.5" x2="170" y2="116.5" stroke="#ef4444" stroke-width="0.5"/>
+  <line x1="-75" y1="72.25" x2="180" y2="72.25" stroke="#94a3b8" stroke-width="0.8"/>
+  <line x1="-75" y1="79.75" x2="180" y2="79.75" stroke="#94a3b8" stroke-width="0.65"/>
+  <line x1="-75" y1="87.25" x2="180" y2="87.25" stroke="#94a3b8" stroke-width="0.55"/>
+  <line x1="-75" y1="94.75" x2="180" y2="94.75" stroke="#94a3b8" stroke-width="0.45"/>
+  <line x1="-75" y1="102.25" x2="180" y2="102.25" stroke="#94a3b8" stroke-width="0.35"/>
+  <line x1="-75" y1="109.75" x2="180" y2="109.75" stroke="#94a3b8" stroke-width="0.25"/>
+  <!-- Nut (0.0 mm) -->
+  <rect x="-2" y="67" width="4" height="48" fill="#0f172a" stroke="#000000" stroke-width="0.5"/>
+  <text x="0" y="65" font-size="3.2" font-weight="900" fill="#0f172a" text-anchor="middle">NUT (0.0 cm)</text>
+  <text x="-4" y="73.25" font-size="2.2" font-weight="bold" fill="#475569" text-anchor="end">E (6th)</text>
+  <text x="-4" y="80.75" font-size="2.2" font-weight="bold" fill="#475569" text-anchor="end">A (5th)</text>
+  <text x="-4" y="88.25" font-size="2.2" font-weight="bold" fill="#475569" text-anchor="end">D (4th)</text>
+  <text x="-4" y="95.75" font-size="2.2" font-weight="bold" fill="#475569" text-anchor="end">G (3rd)</text>
+  <text x="-4" y="103.25" font-size="2.2" font-weight="bold" fill="#475569" text-anchor="end">B (2nd)</text>
+  <text x="-4" y="110.75" font-size="2.2" font-weight="bold" fill="#475569" text-anchor="end">e (1st)</text>
+  <!-- Headstock Tag -->
+  <text x="-42.5" y="121" font-size="3" font-weight="bold" fill="#64748b" text-anchor="middle">HEADSTOCK AREA</text>
+  <!-- Fret 1 (3.64 cm) -->
+  <line x1="36.40" y1="68" x2="36.40" y2="114" stroke="#475569" stroke-width="1.0"/>
+  <text x="36.40" y="119.5" font-size="3.2" font-weight="bold" fill="#1e293b" text-anchor="middle">1</text>
+  <text x="36.40" y="123" font-size="2.0" font-family="monospace" fill="#64748b" text-anchor="middle">3.6cm</text>
+  <!-- Fret 2 (7.07 cm) -->
+  <line x1="70.70" y1="68" x2="70.70" y2="114" stroke="#475569" stroke-width="1.0"/>
+  <text x="70.70" y="119.5" font-size="3.2" font-weight="bold" fill="#1e293b" text-anchor="middle">2</text>
+  <text x="70.70" y="123" font-size="2.0" font-family="monospace" fill="#64748b" text-anchor="middle">7.1cm</text>
+  <!-- Fret 3 (10.31 cm) -->
+  <line x1="103.10" y1="68" x2="103.10" y2="114" stroke="#475569" stroke-width="1.0"/>
+  <text x="103.10" y="119.5" font-size="3.2" font-weight="bold" fill="#1e293b" text-anchor="middle">3</text>
+  <text x="103.10" y="123" font-size="2.0" font-family="monospace" fill="#64748b" text-anchor="middle">10.3cm</text>
+  <circle cx="86.90" cy="91.00" r="2.8" fill="#e2e8f0" stroke="#94a3b8" stroke-width="0.5"/>
+  <!-- Fret 4 (13.36 cm) -->
+  <line x1="133.60" y1="68" x2="133.60" y2="114" stroke="#475569" stroke-width="1.0"/>
+  <text x="133.60" y="119.5" font-size="3.2" font-weight="bold" fill="#1e293b" text-anchor="middle">4</text>
+  <text x="133.60" y="123" font-size="2.0" font-family="monospace" fill="#64748b" text-anchor="middle">13.4cm</text>
+  <!-- Fret 5 (16.25 cm) -->
+  <line x1="162.50" y1="68" x2="162.50" y2="114" stroke="#475569" stroke-width="1.0"/>
+  <text x="162.50" y="119.5" font-size="3.2" font-weight="bold" fill="#1e293b" text-anchor="middle">5</text>
+  <text x="162.50" y="123" font-size="2.0" font-family="monospace" fill="#64748b" text-anchor="middle">16.3cm</text>
+  <circle cx="148.05" cy="91.00" r="2.8" fill="#e2e8f0" stroke="#94a3b8" stroke-width="0.5"/>
+  <!-- ArUco Marker ID 1 -->
+  <rect x="-70.50" y="77.00" width="28.00" height="28.00" fill="#ffffff" stroke="#94a3b8" stroke-width="0.3"/>
+  <rect x="-67.00" y="80.50" width="21.00" height="21.00" fill="#000000"/>
+  <rect x="-64.000" y="83.500" width="3.020" height="3.020" fill="#ffffff"/>
+  <rect x="-64.000" y="86.500" width="3.020" height="3.020" fill="#ffffff"/>
+  <rect x="-64.000" y="89.500" width="3.020" height="3.020" fill="#ffffff"/>
+  <rect x="-64.000" y="92.500" width="3.020" height="3.020" fill="#ffffff"/>
+  <rect x="-64.000" y="95.500" width="3.020" height="3.020" fill="#ffffff"/>
+  <rect x="-58.000" y="95.500" width="3.020" height="3.020" fill="#ffffff"/>
+  <rect x="-55.000" y="95.500" width="3.020" height="3.020" fill="#ffffff"/>
+  <rect x="-52.000" y="95.500" width="3.020" height="3.020" fill="#ffffff"/>
+  <text x="-56.5" y="75.5" font-family="system-ui, -apple-system, sans-serif" font-size="2.4" font-weight="bold" fill="#0284c7" text-anchor="middle">ArUco ID 1 (21mm)</text>
+  <!-- ArUco Marker ID 2 -->
+  <rect x="136.00" y="72.00" width="38.00" height="38.00" fill="#ffffff" stroke="#94a3b8" stroke-width="0.3"/>
+  <rect x="139.50" y="75.50" width="31.00" height="31.00" fill="#000000"/>
+  <rect x="143.929" y="79.929" width="4.449" height="4.449" fill="#ffffff"/>
+  <rect x="143.929" y="84.357" width="4.449" height="4.449" fill="#ffffff"/>
+  <rect x="143.929" y="88.786" width="4.449" height="4.449" fill="#ffffff"/>
+  <rect x="143.929" y="93.214" width="4.449" height="4.449" fill="#ffffff"/>
+  <rect x="148.357" y="97.643" width="4.449" height="4.449" fill="#ffffff"/>
+  <rect x="161.643" y="97.643" width="4.449" height="4.449" fill="#ffffff"/>
+  <text x="155.0" y="70.5" font-family="system-ui, -apple-system, sans-serif" font-size="2.4" font-weight="bold" fill="#0284c7" text-anchor="middle">ArUco ID 2 (31mm)</text>
+  <!-- Top & Bottom Edge Cut Lines / Ruler -->
+  <line x1="-70" y1="68" x2="-70" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="-70" y1="114" x2="-70" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="-70" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">-7</text>
+  <line x1="-60" y1="68" x2="-60" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="-60" y1="114" x2="-60" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="-60" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">-6</text>
+  <line x1="-50" y1="68" x2="-50" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="-50" y1="114" x2="-50" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="-50" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">-5</text>
+  <line x1="-40" y1="68" x2="-40" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="-40" y1="114" x2="-40" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="-40" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">-4</text>
+  <line x1="-30" y1="68" x2="-30" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="-30" y1="114" x2="-30" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="-30" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">-3</text>
+  <line x1="-20" y1="68" x2="-20" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="-20" y1="114" x2="-20" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="-20" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">-2</text>
+  <line x1="-10" y1="68" x2="-10" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="-10" y1="114" x2="-10" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="-10" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">-1</text>
+  <line x1="0" y1="68" x2="0" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="0" y1="114" x2="0" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="0" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">0</text>
+  <line x1="10" y1="68" x2="10" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="10" y1="114" x2="10" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="10" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">1</text>
+  <line x1="20" y1="68" x2="20" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="20" y1="114" x2="20" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="20" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">2</text>
+  <line x1="30" y1="68" x2="30" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="30" y1="114" x2="30" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="30" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">3</text>
+  <line x1="40" y1="68" x2="40" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="40" y1="114" x2="40" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="40" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">4</text>
+  <line x1="50" y1="68" x2="50" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="50" y1="114" x2="50" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="50" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">5</text>
+  <line x1="60" y1="68" x2="60" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="60" y1="114" x2="60" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="60" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">6</text>
+  <line x1="70" y1="68" x2="70" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="70" y1="114" x2="70" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="70" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">7</text>
+  <line x1="80" y1="68" x2="80" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="80" y1="114" x2="80" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="80" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">8</text>
+  <line x1="90" y1="68" x2="90" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="90" y1="114" x2="90" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="90" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">9</text>
+  <line x1="100" y1="68" x2="100" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="100" y1="114" x2="100" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="100" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">10</text>
+  <line x1="110" y1="68" x2="110" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="110" y1="114" x2="110" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="110" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">11</text>
+  <line x1="120" y1="68" x2="120" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="120" y1="114" x2="120" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="120" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">12</text>
+  <line x1="130" y1="68" x2="130" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="130" y1="114" x2="130" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="130" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">13</text>
+  <line x1="140" y1="68" x2="140" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="140" y1="114" x2="140" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="140" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">14</text>
+  <line x1="150" y1="68" x2="150" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="150" y1="114" x2="150" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="150" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">15</text>
+  <line x1="160" y1="68" x2="160" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="160" y1="114" x2="160" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="160" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">16</text>
+  <line x1="170" y1="68" x2="170" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="170" y1="114" x2="170" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="170" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">17</text>
+  <line x1="180" y1="68" x2="180" y2="66" stroke="#64748b" stroke-width="0.4"/>
+  <line x1="180" y1="114" x2="180" y2="116" stroke="#64748b" stroke-width="0.4"/>
+  <text x="180" y="128" font-size="2.0" font-family="monospace" fill="#94a3b8" text-anchor="middle">18</text>
+</g>
+<!-- Footer -->
+<rect x="10" y="177" width="260" height="12" rx="3" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="0.4"/>
+<text x="18" y="182" font-size="2.8" font-weight="bold" fill="#334155">ASSEMBLY TIP:</text>
+<text x="45" y="182" font-size="2.6" fill="#475569">Cut along the red dashed lines and align the crosshair targets. Glue or double-sided tape onto wood/card.</text>
+<text x="18" y="186.5" font-size="2.5" fill="#64748b">ARGuitar_WASM by Mark Watson · Standard 25.5" (64.8cm) Fender-scale fret positions · 46mm neck width</text>
+</svg>
