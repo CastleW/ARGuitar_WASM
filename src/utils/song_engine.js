@@ -210,65 +210,6 @@ const CHORD_ROOT_MIDI = {
 
 export const BUILT_IN_SONGS = [
   {
-    id: 'four-chord-pop',
-    title: '4-Chord Pop Anthem',
-    subtitle: "Don't Stop Strumming",
-    genre: 'Pop / Rock',
-    recommendedTone: 'acoustic',
-    bpm: 96,
-    difficulty: 'Beginner',
-    timeSignature: [4, 4],
-    description: 'The legendary G - D - Em - C sequence heard in hundreds of global hits.',
-    measures: [
-      { chord: 'G',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] },
-      { chord: 'D',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] },
-      { chord: 'Em', beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] },
-      { chord: 'C',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] }
-    ]
-  },
-  {
-    id: 'stand-by-me',
-    title: 'Stand Beside Me',
-    subtitle: 'Classic Soul Groove',
-    genre: 'R&B / Soul',
-    recommendedTone: 'electric_clean',
-    bpm: 110,
-    difficulty: 'Intermediate',
-    timeSignature: [4, 4],
-    description: 'Iconic 50s/60s doo-wop progression: A - F#m - D - E.',
-    measures: [
-      { chord: 'A',   beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] },
-      { chord: 'A',   beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] },
-      { chord: 'F#m', beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] },
-      { chord: 'F#m', beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] },
-      { chord: 'D',   beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] },
-      { chord: 'E',   beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] },
-      { chord: 'A',   beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] },
-      { chord: 'A',   beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] }
-    ]
-  },
-  {
-    id: 'knockin-heavens-door',
-    title: "Heaven's Gate",
-    subtitle: 'Acoustic Folk Anthem',
-    genre: 'Folk / Rock',
-    recommendedTone: 'acoustic',
-    bpm: 72,
-    difficulty: 'Beginner',
-    timeSignature: [4, 4],
-    description: 'Soulful acoustic changes: G - D - Am / G - D - C.',
-    measures: [
-      { chord: 'G',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', null] },
-      { chord: 'D',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', null] },
-      { chord: 'Am', beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] },
-      { chord: 'Am', beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] },
-      { chord: 'G',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', null] },
-      { chord: 'D',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', null] },
-      { chord: 'C',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] },
-      { chord: 'C',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] }
-    ]
-  },
-  {
     id: 'twelve-bar-blues',
     title: '12-Bar Blues in E',
     subtitle: 'Chicago Shuffle',
@@ -294,20 +235,62 @@ export const BUILT_IN_SONGS = [
     ]
   },
   {
-    id: 'wonder-strum',
-    title: 'Wonder Strum',
-    subtitle: '90s Britpop Acoustic',
-    genre: 'Britpop / Acoustic',
+    id: 'four-chord-pop',
+    title: '4-Chord Pop Anthem',
+    subtitle: "Don't Stop Strumming",
+    genre: 'Pop / Rock',
     recommendedTone: 'acoustic',
-    bpm: 86,
+    bpm: 96,
     difficulty: 'Beginner',
     timeSignature: [4, 4],
-    description: 'Em - G - D - A driving acoustic rhythm with open resonant strings.',
+    description: 'The legendary G - D - Em - C sequence heard in hundreds of global hits.',
     measures: [
-      { chord: 'Em', beats: 4, strumGuide: ['D', null, 'D', 'U', 'D', 'U', 'D', 'U'] },
-      { chord: 'G',  beats: 4, strumGuide: ['D', null, 'D', 'U', 'D', 'U', 'D', 'U'] },
-      { chord: 'D',  beats: 4, strumGuide: ['D', null, 'D', 'U', 'D', 'U', 'D', 'U'] },
-      { chord: 'A',  beats: 4, strumGuide: ['D', null, 'D', 'U', 'D', 'U', 'D', 'U'] }
+      { chord: 'G',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] },
+      { chord: 'D',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] },
+      { chord: 'Em', beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] },
+      { chord: 'C',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] }
+    ]
+  },
+  {
+    id: 'knockin-heavens-door',
+    title: "Heaven's Gate",
+    subtitle: 'Acoustic Folk Anthem',
+    genre: 'Folk / Rock',
+    recommendedTone: 'acoustic',
+    bpm: 72,
+    difficulty: 'Beginner',
+    timeSignature: [4, 4],
+    description: 'Soulful acoustic changes: G - D - Am / G - D - C.',
+    measures: [
+      { chord: 'G',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', null] },
+      { chord: 'D',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', null] },
+      { chord: 'Am', beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] },
+      { chord: 'Am', beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] },
+      { chord: 'G',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', null] },
+      { chord: 'D',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', null] },
+      { chord: 'C',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] },
+      { chord: 'C',  beats: 4, strumGuide: ['D', null, 'D', 'U', null, 'U', 'D', 'U'] }
+    ]
+  },
+  {
+    id: 'midnight-highway',
+    title: 'Midnight Highway',
+    subtitle: 'High-Voltage Rock Riff',
+    genre: 'Hard Rock / Crunch',
+    recommendedTone: 'distortion',
+    bpm: 116,
+    difficulty: 'Beginner',
+    timeSignature: [4, 4],
+    description: 'Hard-hitting distorted power downstrokes on A, D, and G with classic rock crunch.',
+    measures: [
+      { chord: 'A', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, null, null] },
+      { chord: 'D', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, 'D', null] },
+      { chord: 'G', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, null, null] },
+      { chord: 'D', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, 'D', null] },
+      { chord: 'A', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, null, null] },
+      { chord: 'D', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, 'D', null] },
+      { chord: 'G', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, null, null] },
+      { chord: 'A', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, null, null] }
     ]
   },
   {
@@ -332,24 +315,41 @@ export const BUILT_IN_SONGS = [
     ]
   },
   {
-    id: 'midnight-highway',
-    title: 'Midnight Highway',
-    subtitle: 'High-Voltage Rock Riff',
-    genre: 'Hard Rock / Crunch',
-    recommendedTone: 'distortion',
-    bpm: 116,
+    id: 'stand-by-me',
+    title: 'Stand Beside Me',
+    subtitle: 'Classic Soul Groove',
+    genre: 'R&B / Soul',
+    recommendedTone: 'electric_clean',
+    bpm: 110,
+    difficulty: 'Intermediate',
+    timeSignature: [4, 4],
+    description: 'Iconic 50s/60s doo-wop progression: A - F#m - D - E.',
+    measures: [
+      { chord: 'A',   beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] },
+      { chord: 'A',   beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] },
+      { chord: 'F#m', beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] },
+      { chord: 'F#m', beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] },
+      { chord: 'D',   beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] },
+      { chord: 'E',   beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] },
+      { chord: 'A',   beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] },
+      { chord: 'A',   beats: 4, strumGuide: ['D', null, 'D', null, 'D', 'U', 'D', null] }
+    ]
+  },
+  {
+    id: 'wonder-strum',
+    title: 'Wonder Strum',
+    subtitle: '90s Britpop Acoustic',
+    genre: 'Britpop / Acoustic',
+    recommendedTone: 'acoustic',
+    bpm: 86,
     difficulty: 'Beginner',
     timeSignature: [4, 4],
-    description: 'Hard-hitting distorted power downstrokes on A, D, and G with classic rock crunch.',
+    description: 'Em - G - D - A driving acoustic rhythm with open resonant strings.',
     measures: [
-      { chord: 'A', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, null, null] },
-      { chord: 'D', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, 'D', null] },
-      { chord: 'G', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, null, null] },
-      { chord: 'D', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, 'D', null] },
-      { chord: 'A', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, null, null] },
-      { chord: 'D', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, 'D', null] },
-      { chord: 'G', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, null, null] },
-      { chord: 'A', beats: 4, strumGuide: ['D', null, 'D', null, 'D', null, null, null] }
+      { chord: 'Em', beats: 4, strumGuide: ['D', null, 'D', 'U', 'D', 'U', 'D', 'U'] },
+      { chord: 'G',  beats: 4, strumGuide: ['D', null, 'D', 'U', 'D', 'U', 'D', 'U'] },
+      { chord: 'D',  beats: 4, strumGuide: ['D', null, 'D', 'U', 'D', 'U', 'D', 'U'] },
+      { chord: 'A',  beats: 4, strumGuide: ['D', null, 'D', 'U', 'D', 'U', 'D', 'U'] }
     ]
   }
 ];
