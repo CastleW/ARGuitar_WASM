@@ -56,7 +56,7 @@
 <line x1="203.045" y1="112" x2="203.045" y2="126" stroke="#94a3b8" stroke-width="0.4"/>
 <line x1="207.035" y1="112" x2="207.035" y2="126" stroke="#94a3b8" stroke-width="0.4"/>
 <line x1="210.81499999999997" y1="112" x2="210.81499999999997" y2="126" stroke="#94a3b8" stroke-width="0.4"/>
-<rect x="24.3" y="115.325" width="7.35" height="7.35" fill="#0284c7"/>
+<rect x="22.55" y="113.575" width="10.85" height="10.85" fill="#0284c7"/>
 <text x="27.975" y="132" font-size="2.2" font-weight="bold" fill="#0284c7" text-anchor="middle">M1</text>
 <text x="27.975" y="135" font-size="1.8" font-family="monospace" fill="#64748b" text-anchor="middle">-5.7cm</text>
 <rect x="96.575" y="113.575" width="10.85" height="10.85" fill="#0284c7"/>

@@ -12,7 +12,7 @@ const FRET_DISTANCES_MM = [
 ];
 
 const MARKERS = [
-  { id: 1, centerMm: -56.5, sizeMm: 21.0, label: 'Marker 1 (Headstock)' },
+  { id: 1, centerMm: -56.5, sizeMm: 31.0, label: 'Marker 1 (Headstock)' },
   { id: 2, centerMm: 155.0, sizeMm: 31.0, label: 'Marker 2 (Fret 5)' },
   { id: 3, centerMm: 273.0, sizeMm: 31.0, label: 'Marker 3 (Fret 9-10)' },
   { id: 4, centerMm: 366.0, sizeMm: 31.0, label: 'Marker 4 (Fret 14-15)' },
@@ -25,8 +25,8 @@ const DOUBLE_DOT_FRET = 12;
 const NECK_WIDTH_MM = 46.0;
 const STRING_COUNT = 6;
 const STRING_SPAN_MM = 37.5;
-const STRING_NAMES = ['E (6th)', 'A (5th)', 'D (4th)', 'G (3rd)', 'B (2nd)', 'e (1st)'];
-const STRING_WEIGHTS = [0.8, 0.65, 0.55, 0.45, 0.35, 0.25];
+const STRING_NAMES = ['e (1st)', 'B (2nd)', 'G (3rd)', 'D (4th)', 'A (5th)', 'E (6th)'];
+const STRING_WEIGHTS = [0.25, 0.35, 0.45, 0.55, 0.65, 0.8];
 
 function getMarkerBits(id) {
   const bytes = arucoDict[id][0];
@@ -352,7 +352,7 @@ function renderNeckSegmentSVG({
 const guideSvg = renderGuidePageSVG({ pageWidthMm: 280, pageHeightMm: 195 });
 
 const page1Svg = renderNeckSegmentSVG({
-  startX: -75,
+  startX: -82,
   endX: 180,
   pageTitle: 'Headstock & Frets 0–5 (Nut, Marker 1 & Marker 2)',
   pageNumber: 1,
@@ -381,7 +381,7 @@ const page3Svg = renderNeckSegmentSVG({
 
 // Full continuous scale SVG (670mm x 90mm)
 function renderFullContinuousSVG() {
-  const startX = -80;
+  const startX = -85;
   const endX = 580;
   const totalW = endX - startX + 40;
   const totalH = 100;
@@ -404,6 +404,10 @@ function renderFullContinuousSVG() {
 
   svg += `  <rect x="-2" y="${neckTopY - 1}" width="4" height="${NECK_WIDTH_MM + 2}" fill="#0f172a"/>\n`;
   svg += `  <text x="0" y="${neckTopY - 3}" font-size="3" font-weight="bold" fill="#0f172a" text-anchor="middle">NUT (0.0 cm)</text>\n`;
+  for (let s = 0; s < STRING_COUNT; s++) {
+    const sy = firstStringY + s * stringStep;
+    svg += `  <text x="-4" y="${(sy + 1).toFixed(2)}" font-size="2.2" font-weight="bold" fill="#475569" text-anchor="end">${STRING_NAMES[s]}</text>\n`;
+  }
 
   FRET_DISTANCES_MM.forEach((fretX, idx) => {
     const fretNum = idx + 1;
@@ -459,8 +463,8 @@ const printableHtml = `<!DOCTYPE html>
   <title>ARGuitar Printable Practice Neck (1:1 Actual Size)</title>
   <style>
     @page {
-      size: A4 landscape;
-      margin: 8mm 6mm;
+      size: 297mm 210mm;
+      margin: 0;
     }
     * {
       box-sizing: border-box;
@@ -543,24 +547,39 @@ const printableHtml = `<!DOCTYPE html>
       height: 195mm;
       margin: 15px auto;
       box-shadow: 0 4px 20px rgba(0,0,0,0.6);
-      page-break-after: always;
       display: flex;
       align-items: center;
       justify-content: center;
     }
     @media print {
-      body {
-        background: transparent;
+      html, body {
+        background: #ffffff !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        width: 297mm;
+        height: auto;
       }
       .no-print {
         display: none !important;
       }
       .page {
         margin: 0 !important;
+        padding: 0 !important;
         box-shadow: none !important;
-        width: 100% !important;
-        height: 100% !important;
-        page-break-after: always;
+        width: 297mm !important;
+        height: 210mm !important;
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        page-break-after: always !important;
+        break-after: page !important;
+        overflow: hidden !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+      }
+      .page:last-of-type {
+        page-break-after: avoid !important;
+        break-after: avoid !important;
       }
     }
   </style>

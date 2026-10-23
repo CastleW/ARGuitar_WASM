@@ -1,15 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 100" width="700mm" height="100mm" style="background:#ffffff; font-family:system-ui,-apple-system,sans-serif;">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 705 100" width="705mm" height="100mm" style="background:#ffffff; font-family:system-ui,-apple-system,sans-serif;">
 <text x="20" y="15" font-size="5" font-weight="bold" fill="#0f172a">ARGuitar Continuous Practice Neck (1:1 Full Scale — 25.5" Fender Scale)</text>
-<g transform="translate(100, 0)">
-  <rect x="-80" y="30" width="660" height="46" fill="#fdfbf7" stroke="#334155" stroke-width="0.8"/>
-  <line x1="-80" y1="34.25" x2="580" y2="34.25" stroke="#94a3b8" stroke-width="0.8"/>
-  <line x1="-80" y1="41.75" x2="580" y2="41.75" stroke="#94a3b8" stroke-width="0.65"/>
-  <line x1="-80" y1="49.25" x2="580" y2="49.25" stroke="#94a3b8" stroke-width="0.55"/>
-  <line x1="-80" y1="56.75" x2="580" y2="56.75" stroke="#94a3b8" stroke-width="0.45"/>
-  <line x1="-80" y1="64.25" x2="580" y2="64.25" stroke="#94a3b8" stroke-width="0.35"/>
-  <line x1="-80" y1="71.75" x2="580" y2="71.75" stroke="#94a3b8" stroke-width="0.25"/>
+<g transform="translate(105, 0)">
+  <rect x="-85" y="30" width="665" height="46" fill="#fdfbf7" stroke="#334155" stroke-width="0.8"/>
+  <line x1="-85" y1="34.25" x2="580" y2="34.25" stroke="#94a3b8" stroke-width="0.25"/>
+  <line x1="-85" y1="41.75" x2="580" y2="41.75" stroke="#94a3b8" stroke-width="0.35"/>
+  <line x1="-85" y1="49.25" x2="580" y2="49.25" stroke="#94a3b8" stroke-width="0.45"/>
+  <line x1="-85" y1="56.75" x2="580" y2="56.75" stroke="#94a3b8" stroke-width="0.55"/>
+  <line x1="-85" y1="64.25" x2="580" y2="64.25" stroke="#94a3b8" stroke-width="0.65"/>
+  <line x1="-85" y1="71.75" x2="580" y2="71.75" stroke="#94a3b8" stroke-width="0.8"/>
   <rect x="-2" y="29" width="4" height="48" fill="#0f172a"/>
   <text x="0" y="27" font-size="3" font-weight="bold" fill="#0f172a" text-anchor="middle">NUT (0.0 cm)</text>
+  <text x="-4" y="35.25" font-size="2.2" font-weight="bold" fill="#475569" text-anchor="end">e (1st)</text>
+  <text x="-4" y="42.75" font-size="2.2" font-weight="bold" fill="#475569" text-anchor="end">B (2nd)</text>
+  <text x="-4" y="50.25" font-size="2.2" font-weight="bold" fill="#475569" text-anchor="end">G (3rd)</text>
+  <text x="-4" y="57.75" font-size="2.2" font-weight="bold" fill="#475569" text-anchor="end">D (4th)</text>
+  <text x="-4" y="65.25" font-size="2.2" font-weight="bold" fill="#475569" text-anchor="end">A (5th)</text>
+  <text x="-4" y="72.75" font-size="2.2" font-weight="bold" fill="#475569" text-anchor="end">E (6th)</text>
   <line x1="36.40" y1="30" x2="36.40" y2="76" stroke="#475569" stroke-width="0.8"/>
   <text x="36.40" y="81" font-size="2.8" font-weight="bold" fill="#1e293b" text-anchor="middle">1</text>
   <line x1="70.70" y1="30" x2="70.70" y2="76" stroke="#475569" stroke-width="0.8"/>
@@ -67,17 +73,17 @@
   <rect x="475" y="32" width="95" height="42" fill="rgba(56, 189, 248, 0.08)" stroke="#38bdf8" stroke-dasharray="3,2" stroke-width="0.5"/>
   <text x="522" y="27.5" font-size="3" font-weight="bold" fill="#0284c7" text-anchor="middle">⚡ STRUM ZONE</text>
   <!-- ArUco Marker ID 1 -->
-  <rect x="-70.50" y="39.00" width="28.00" height="28.00" fill="#ffffff" stroke="#94a3b8" stroke-width="0.3"/>
-  <rect x="-67.00" y="42.50" width="21.00" height="21.00" fill="#000000"/>
-  <rect x="-64.000" y="45.500" width="3.020" height="3.020" fill="#ffffff"/>
-  <rect x="-64.000" y="48.500" width="3.020" height="3.020" fill="#ffffff"/>
-  <rect x="-64.000" y="51.500" width="3.020" height="3.020" fill="#ffffff"/>
-  <rect x="-64.000" y="54.500" width="3.020" height="3.020" fill="#ffffff"/>
-  <rect x="-64.000" y="57.500" width="3.020" height="3.020" fill="#ffffff"/>
-  <rect x="-58.000" y="57.500" width="3.020" height="3.020" fill="#ffffff"/>
-  <rect x="-55.000" y="57.500" width="3.020" height="3.020" fill="#ffffff"/>
-  <rect x="-52.000" y="57.500" width="3.020" height="3.020" fill="#ffffff"/>
-  <text x="-56.5" y="37.5" font-family="system-ui, -apple-system, sans-serif" font-size="2.4" font-weight="bold" fill="#0284c7" text-anchor="middle">ArUco ID 1 (21mm)</text>
+  <rect x="-75.50" y="34.00" width="38.00" height="38.00" fill="#ffffff" stroke="#94a3b8" stroke-width="0.3"/>
+  <rect x="-72.00" y="37.50" width="31.00" height="31.00" fill="#000000"/>
+  <rect x="-67.571" y="41.929" width="4.449" height="4.449" fill="#ffffff"/>
+  <rect x="-67.571" y="46.357" width="4.449" height="4.449" fill="#ffffff"/>
+  <rect x="-67.571" y="50.786" width="4.449" height="4.449" fill="#ffffff"/>
+  <rect x="-67.571" y="55.214" width="4.449" height="4.449" fill="#ffffff"/>
+  <rect x="-67.571" y="59.643" width="4.449" height="4.449" fill="#ffffff"/>
+  <rect x="-58.714" y="59.643" width="4.449" height="4.449" fill="#ffffff"/>
+  <rect x="-54.286" y="59.643" width="4.449" height="4.449" fill="#ffffff"/>
+  <rect x="-49.857" y="59.643" width="4.449" height="4.449" fill="#ffffff"/>
+  <text x="-56.5" y="32.5" font-family="system-ui, -apple-system, sans-serif" font-size="2.4" font-weight="bold" fill="#0284c7" text-anchor="middle">ArUco ID 1 (31mm)</text>
   <!-- ArUco Marker ID 2 -->
   <rect x="136.00" y="34.00" width="38.00" height="38.00" fill="#ffffff" stroke="#94a3b8" stroke-width="0.3"/>
   <rect x="139.50" y="37.50" width="31.00" height="31.00" fill="#000000"/>
