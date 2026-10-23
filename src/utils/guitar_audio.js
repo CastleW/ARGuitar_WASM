@@ -147,11 +147,20 @@ class GuitarAudioEngine {
 
       this.applyInstrumentEQ(this.currentInstrument);
 
-      // Connect EQ chain: masterGain -> bodyLow -> bodyMid -> bodyHigh -> destination
+      // Brickwall soft limiter to guarantee zero digital clipping or harshness
+      this.limiter = this.ctx.createDynamicsCompressor();
+      this.limiter.threshold.setValueAtTime(-1.0, this.ctx.currentTime);
+      this.limiter.knee.setValueAtTime(0, this.ctx.currentTime);
+      this.limiter.ratio.setValueAtTime(20, this.ctx.currentTime);
+      this.limiter.attack.setValueAtTime(0.002, this.ctx.currentTime);
+      this.limiter.release.setValueAtTime(0.05, this.ctx.currentTime);
+
+      // Connect EQ chain: masterGain -> bodyLow -> bodyMid -> bodyHigh -> limiter -> destination
       this.masterGain.connect(this.bodyLow);
       this.bodyLow.connect(this.bodyMid);
       this.bodyMid.connect(this.bodyHigh);
-      this.bodyHigh.connect(this.ctx.destination);
+      this.bodyHigh.connect(this.limiter);
+      this.limiter.connect(this.ctx.destination);
     }
 
     if (this.ctx.state === 'suspended') {
@@ -162,12 +171,19 @@ class GuitarAudioEngine {
       }
     }
 
-    // Trigger loading of current instrument soundfont in background
+    // Await loading of current instrument soundfont so first strum has studio samples
     if (!this.loadedInstruments.has(this.currentInstrument)) {
-      this.loadInstrumentSoundfont(this.currentInstrument);
+      await this.loadInstrumentSoundfont(this.currentInstrument);
     }
 
     return this.ctx.state === 'running';
+  }
+
+  /**
+   * Compatibility alias for ensureAudioContext
+   */
+  async init() {
+    return this.ensureAudioContext();
   }
 
   /**
@@ -184,7 +200,8 @@ class GuitarAudioEngine {
     if (!this.ctx || !this.bodyHigh) return null;
 
     const dest = this.ctx.createMediaStreamDestination();
-    if (includeApp) this.bodyHigh.connect(dest);
+    const sourceNode = this.limiter || this.bodyHigh;
+    if (includeApp) sourceNode.connect(dest);
 
     let micSource = null;
     let micGain = null;
@@ -394,7 +411,10 @@ class GuitarAudioEngine {
   /**
    * Play a real studio-recorded guitar sample with tailored envelope & damping
    */
-  playSampleNote(audioBuffer, velocity, now, instrumentId = 'acoustic', stringNum = 1) {
+  playSampleNote(audioBuffer, velocity, scheduledTime, instrumentId = 'acoustic', stringNum = 1) {
+    // Ensure schedule time is never in the past
+    const now = Math.max(this.ctx.currentTime, scheduledTime);
+
     // Choke any existing note ringing on this specific string
     this.chokeStringVoice(stringNum, now);
 
@@ -430,9 +450,9 @@ class GuitarAudioEngine {
     }
 
     // ADSR Envelope:
-    // 1. Attack: 3ms linear ramp to prevent clicking
+    // 1. Attack: 4ms smooth linear ramp to prevent clicking
     voiceGain.gain.setValueAtTime(0.0001, now);
-    voiceGain.gain.linearRampToValueAtTime(peakVolume, now + 0.003);
+    voiceGain.gain.linearRampToValueAtTime(peakVolume, now + 0.004);
 
     // 2. Sustain: natural decay slope down to sustain floor
     const sustainEndTime = now + sustainSec;
@@ -460,62 +480,53 @@ class GuitarAudioEngine {
   }
 
   /**
-   * High-quality warm physical modeling synthesis (instant fallback)
+   * Warm, stable physical-modeled acoustic pluck synthesis (instant fallback)
+   * Uses dual-oscillator string harmonics + Butterworth dynamic lowpass envelope.
+   * Completely free of unstable resonant feedback loops or white-noise bursts.
    */
-  playSynthesizedNote(freq, velocity, now, stringNum, instrumentId = 'acoustic') {
+  playSynthesizedNote(freq, velocity, scheduledTime, stringNum, instrumentId = 'acoustic') {
+    const now = Math.max(this.ctx.currentTime, scheduledTime);
     this.chokeStringVoice(stringNum, now);
 
-    const sampleRate = this.ctx.sampleRate;
-    const periodSamples = Math.round(sampleRate / freq);
-    const burstDuration = Math.max(0.004, (periodSamples / sampleRate) * 1.5);
-
-    // Warm pluck excitation: band-limited low-pass filtered impulse rather than white noise
-    const noiseBuffer = this.ctx.createBuffer(1, Math.round(sampleRate * burstDuration), sampleRate);
-    const output = noiseBuffer.getChannelData(0);
-    let prev = 0;
-    for (let i = 0; i < output.length; i++) {
-      const white = Math.random() * 2 - 1;
-      const smoothed = prev * 0.65 + white * 0.35;
-      prev = smoothed;
-      output[i] = smoothed * Math.exp(-i / (output.length * 0.35));
-    }
-
-    const noiseSource = this.ctx.createBufferSource();
-    noiseSource.buffer = noiseBuffer;
-
-    const delayNode = this.ctx.createDelay(1.0);
-    delayNode.delayTime.setValueAtTime(1 / freq, now);
-
-    // Damping filter inside the feedback loop
-    const dampingFilter = this.ctx.createBiquadFilter();
-    dampingFilter.type = 'lowpass';
-    const cutoff = (this.isPalmMuted ? 1100 : 1600) + (7 - stringNum) * (this.isPalmMuted ? 200 : 450);
-    dampingFilter.frequency.setValueAtTime(cutoff, now);
-    dampingFilter.Q.setValueAtTime(1.2, now);
-
-    const feedbackGain = this.ctx.createGain();
-    const instConfig = GUITAR_INSTRUMENTS[instrumentId] || GUITAR_INSTRUMENTS.acoustic;
-    const sustainSec = this.isPalmMuted ? 0.30 : (instConfig.sustainSec || 2.5);
-    feedbackGain.gain.setValueAtTime(this.isPalmMuted ? 0.88 : 0.988, now);
-
+    const osc = this.ctx.createOscillator();
+    const osc2 = this.ctx.createOscillator();
+    const filter = this.ctx.createBiquadFilter();
     const voiceGain = this.ctx.createGain();
-    const peakVolume = Math.max(0.2, Math.min(1.0, velocity)) * (this.isPalmMuted ? 0.7 : 0.8);
-    voiceGain.gain.setValueAtTime(0, now);
-    voiceGain.gain.linearRampToValueAtTime(peakVolume, now + 0.003);
-    voiceGain.gain.exponentialRampToValueAtTime(0.001, now + sustainSec);
 
-    noiseSource.connect(voiceGain);
+    // Fundamental: triangle wave provides natural odd string harmonics
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(freq, now);
+
+    // Warm second harmonic body resonance
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(freq * 2, now);
+
+    // Dynamic lowpass pluck filter envelope: bright attack that darkens into body resonance
+    filter.type = 'lowpass';
+    const baseCutoff = (this.isPalmMuted ? 750 : 2200) + (7 - stringNum) * 320;
+    filter.frequency.setValueAtTime(baseCutoff * 2.2, now);
+    filter.frequency.exponentialRampToValueAtTime(Math.max(100, freq * 1.4), now + (this.isPalmMuted ? 0.20 : 1.5));
+    filter.Q.setValueAtTime(0.707, now); // Non-resonant Butterworth filter
+
+    const instConfig = GUITAR_INSTRUMENTS[instrumentId] || GUITAR_INSTRUMENTS.acoustic;
+    const sustainSec = this.isPalmMuted ? 0.28 : (instConfig.sustainSec || 2.4);
+    const peakVolume = Math.max(0.12, Math.min(0.55, velocity * 0.45));
+
+    voiceGain.gain.setValueAtTime(0.0001, now);
+    voiceGain.gain.linearRampToValueAtTime(peakVolume, now + 0.005);
+    voiceGain.gain.exponentialRampToValueAtTime(0.0001, now + sustainSec);
+
+    osc.connect(filter);
+    osc2.connect(filter);
+    filter.connect(voiceGain);
     voiceGain.connect(this.masterGain);
 
-    voiceGain.connect(dampingFilter);
-    dampingFilter.connect(delayNode);
-    delayNode.connect(feedbackGain);
-    feedbackGain.connect(voiceGain);
+    osc.start(now);
+    osc2.start(now);
+    osc.stop(now + sustainSec + 0.05);
+    osc2.stop(now + sustainSec + 0.05);
 
-    noiseSource.start(now);
-    noiseSource.stop(now + burstDuration);
-
-    this.activeVoices.set(stringNum, { source: noiseSource, voiceGain, stopTime: now + sustainSec });
+    this.activeVoices.set(stringNum, { source: osc, voiceGain, stopTime: now + sustainSec });
     return voiceGain;
   }
 
@@ -535,7 +546,6 @@ class GuitarAudioEngine {
     const noteMidi = baseMidi + Math.max(0, fretNum);
     const noteName = midiToNoteName(noteMidi);
     const freq = midiToFrequency(noteMidi);
-    const now = this.ctx.currentTime + startTimeOffsetSec;
 
     const instId = this.currentInstrument;
     const inst = GUITAR_INSTRUMENTS[instId] || GUITAR_INSTRUMENTS.acoustic;
@@ -552,12 +562,16 @@ class GuitarAudioEngine {
       }
     }
 
+    // Crucial: Calculate scheduled play time AFTER any async decoding has resolved,
+    // ensuring the envelope ramp always starts cleanly in the present/future and never in the past!
+    const playTime = Math.max(this.ctx.currentTime, this.ctx.currentTime + startTimeOffsetSec);
+
     if (audioBuffer) {
       // Play real studio-recorded guitar note with envelope & string choking
-      this.playSampleNote(audioBuffer, velocity, now, instId, stringNum);
+      this.playSampleNote(audioBuffer, velocity, playTime, instId, stringNum);
     } else {
       // Warm physical modeling fallback
-      this.playSynthesizedNote(freq, velocity, now, stringNum, instId);
+      this.playSynthesizedNote(freq, velocity, playTime, stringNum, instId);
     }
   }
 

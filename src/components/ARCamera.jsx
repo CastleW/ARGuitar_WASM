@@ -99,7 +99,8 @@ export default function ARCamera({
   cameraSize = '1000',
   onCameraSizeChange,
   showSongStudio = false,
-  onToggleSongStudio
+  onToggleSongStudio,
+  onOpenWalkthrough
 }) {
   const containerRef = useRef(null);
   const videoRef = useRef(null);
@@ -3660,19 +3661,42 @@ export default function ARCamera({
               Play virtual guitar chords in real-time with computer vision. Hold your guitar fretboard up to the webcam and strum to play.
             </p>
 
-            <button
-              onClick={() => startCamera()}
-              className="btn-premium"
-              style={{
-                fontSize: '15px',
-                padding: '10px 24px',
-                gap: '8px',
-                boxShadow: '0 4px 20px rgba(6, 182, 212, 0.4)',
-                cursor: 'pointer'
-              }}
-            >
-              <Play size={16} fill="currentColor" /> Start Camera
-            </button>
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
+              <button
+                onClick={() => startCamera()}
+                className="btn-premium"
+                style={{
+                  fontSize: '15px',
+                  padding: '10px 24px',
+                  gap: '8px',
+                  boxShadow: '0 4px 20px rgba(6, 182, 212, 0.4)',
+                  cursor: 'pointer'
+                }}
+              >
+                <Play size={16} fill="currentColor" /> Start Camera
+              </button>
+
+              {onOpenWalkthrough && (
+                <button
+                  type="button"
+                  onClick={onOpenWalkthrough}
+                  className="btn-secondary"
+                  style={{
+                    fontSize: '14px',
+                    padding: '10px 20px',
+                    gap: '8px',
+                    cursor: 'pointer',
+                    borderColor: 'rgba(56, 189, 248, 0.4)',
+                    background: 'rgba(56, 189, 248, 0.12)',
+                    color: '#38bdf8'
+                  }}
+                  title="Open interactive beginner walkthrough guide"
+                >
+                  <span>📖</span>
+                  <span>Beginner Guide</span>
+                </button>
+              )}
+            </div>
 
             {/* Quick 3-Step Guide */}
             <div style={{
@@ -4903,6 +4927,29 @@ export default function ARCamera({
               <Settings size={14} style={{ color: showAdvancedControls ? 'var(--accent-cyan)' : 'var(--text-secondary)' }} />
               <span style={{ fontFamily: 'var(--font-mono)' }}>Options</span>
             </button>
+
+            {/* Beginner Walkthrough Guide Quick Button */}
+            {onOpenWalkthrough && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={onOpenWalkthrough}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '6px 10px',
+                  fontSize: '12px',
+                  borderColor: 'rgba(56, 189, 248, 0.4)',
+                  background: 'rgba(56, 189, 248, 0.12)',
+                  color: '#38bdf8'
+                }}
+                title="Open Beginner Play-Along Guide"
+              >
+                <span>📖</span>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>Guide</span>
+              </button>
+            )}
 
             {/* Finger & Pick Temporal Smoothing Quick Toggle */}
             <button

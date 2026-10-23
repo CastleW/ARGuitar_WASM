@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import ARCamera from './components/ARCamera';
 import SongStudioPanel from './components/SongStudioPanel';
+import WalkthroughModal from './components/WalkthroughModal';
 
 export default function App() {
   const [logs, setLogs] = useState([]);
   const [showLogs, setShowLogs] = useState(false);
   const [openCvLoaded, setOpenCvLoaded] = useState(!!window.cv);
   const [mediaPipeLoaded, setMediaPipeLoaded] = useState(() => !!(window.FilesetResolver && window.HandLandmarker));
+  const [showWalkthrough, setShowWalkthrough] = useState(false);
   const [cameraSize, setCameraSize] = useState(() => {
     const saved = localStorage.getItem('arguitar_camera_size');
     return ['800', '1000', '1200', 'full'].includes(saved) ? saved : '1000';
@@ -71,6 +73,31 @@ export default function App() {
           </span>
           <span className="status-pill active" style={{ fontSize: '10px' }}>AR LIVE</span>
         </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <button
+            onClick={() => setShowWalkthrough(true)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 14px',
+              fontSize: '12px',
+              fontFamily: 'var(--font-mono)',
+              borderRadius: '8px',
+              border: '1px solid rgba(56, 189, 248, 0.5)',
+              background: 'rgba(56, 189, 248, 0.12)',
+              color: '#38bdf8',
+              cursor: 'pointer',
+              fontWeight: 600,
+              boxShadow: '0 0 15px rgba(56, 189, 248, 0.2)'
+            }}
+            title="Open Beginner Play-Along Guide"
+          >
+            <span>📖</span>
+            <span>How to Play</span>
+          </button>
+        </div>
       </header>
 
       {/* Main workspace container */}
@@ -96,6 +123,7 @@ export default function App() {
             onCameraSizeChange={setCameraSize}
             showSongStudio={showSongStudio}
             onToggleSongStudio={() => setShowSongStudio(prev => !prev)}
+            onOpenWalkthrough={() => setShowWalkthrough(true)}
           />
 
           {/* Subtle Diagnostics & Logs Toggle Link */}
@@ -189,6 +217,13 @@ export default function App() {
           </aside>
         )}
       </main>
+
+      {/* Beginner Play-Along Walkthrough Modal */}
+      <WalkthroughModal
+        isOpen={showWalkthrough}
+        onClose={() => setShowWalkthrough(false)}
+        onOpenSongStudio={() => setShowSongStudio(true)}
+      />
     </div>
   );
 }
