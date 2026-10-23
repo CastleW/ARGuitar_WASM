@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings, Cpu, Music, Camera, SwitchCamera, Activity, Copy, Check, X, Award, Focus } from 'lucide-react';
+import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings, Cpu, Music, Camera, SwitchCamera, Activity, Copy, Check, X, Award, Focus, Sparkles } from 'lucide-react';
 import { detectMarkers, DETECTOR_CONFIG } from '../utils/aruco_detector';
 import {
   getNeckGeometry,
@@ -47,6 +47,49 @@ const FRET_FINGERS = [
   { id: 'ring',   name: 'Ring',   num: '3', tipIdx: 16, dipIdx: 15, color: '#a855f7', ringColor: 'rgba(168, 85, 247, 0.95)', path: [0, 13, 14, 15, 16] },
   { id: 'pinky',  name: 'Pinky',  num: '4', tipIdx: 20, dipIdx: 19, color: '#ec4899', ringColor: 'rgba(236, 72, 153, 0.95)', path: [0, 17, 18, 19, 20] }
 ];
+
+/**
+ * Adaptive Dual-Speed / 1-Euro Exponential Moving Average (EMA) Filter
+ * - When moving slowly or holding still (d <= minCutoff, e.g. 2.5px jitter): uses heavy smoothing (alpha ~ 0.18) to absorb MediaPipe jitter.
+ * - When moving quickly (d >= fastCutoff, e.g. 16px shift/strum): uses high alpha (~0.88) for instantaneous response with zero perceptible lag.
+ * - If signal is lost or gap > maxHoldMs (hand enters frame or teleports): snaps immediately to the new point.
+ */
+function smoothAdaptivePoint2D(
+  prev,
+  next,
+  timestamp,
+  minCutoff = 2.5,
+  fastCutoff = 16.0,
+  minAlpha = 0.18,
+  maxAlpha = 0.88,
+  maxHoldMs = 250
+) {
+  if (!next) return null;
+  if (!prev || !prev.timestamp || (timestamp - prev.timestamp) > maxHoldMs) {
+    return { x: next.x, y: next.y, timestamp };
+  }
+  const dx = next.x - prev.x;
+  const dy = next.y - prev.y;
+  const dist = Math.hypot(dx, dy);
+
+  // If sudden jump / camera cut (> 120px in one frame), snap immediately without dragging
+  if (dist > 120) {
+    return { x: next.x, y: next.y, timestamp };
+  }
+
+  // Calculate speed-adaptive alpha
+  let alpha = minAlpha;
+  if (dist > minCutoff) {
+    const factor = Math.min(1.0, (dist - minCutoff) / Math.max(0.001, fastCutoff - minCutoff));
+    alpha = minAlpha + factor * (maxAlpha - minAlpha);
+  }
+
+  return {
+    x: prev.x + (next.x - prev.x) * alpha,
+    y: prev.y + (next.y - prev.y) * alpha,
+    timestamp
+  };
+}
 
 export default function ARCamera({
   openCvLoaded,
@@ -220,6 +263,19 @@ export default function ARCamera({
     strumModeRef.current = strumMode;
     localStorage.setItem('arguitar_strum_mode', strumMode);
   }, [strumMode]);
+
+  // Finger & Pick Temporal Smoothing (Adaptive 1-Euro Filter) to kill MediaPipe landmark jitter
+  const [smoothFingers, setSmoothFingers] = useState(() => {
+    const saved = localStorage.getItem('arguitar_smooth_fingers');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const smoothFingersRef = useRef(smoothFingers);
+  useEffect(() => {
+    smoothFingersRef.current = smoothFingers;
+    localStorage.setItem('arguitar_smooth_fingers', smoothFingers.toString());
+  }, [smoothFingers]);
+  const smoothedFingersRef = useRef({}); // { [fingerId]: { x, y, timestamp } }
+  const smoothedPickRef = useRef(null);   // { x, y, timestamp }
 
 
   // Song Play-Along Level: 1 = Beginner (Auto-Chord), 2 = Intermediate (Assist / Close Enough), 3 = Pro (Realistic)
@@ -1850,10 +1906,24 @@ export default function ARCamera({
           const dx = tip.x - dip.x;
           const dy = tip.y - dip.y;
           const apexFactor = 0.25;
-          const pos = {
+          const rawPos = {
             x: (tip.x + dx * apexFactor) * width,
             y: (tip.y + dy * apexFactor) * height
           };
+
+          // Apply Adaptive 1-Euro Temporal Smoothing if enabled
+          let pos = rawPos;
+          if (smoothFingersRef.current) {
+            const smoothed = smoothAdaptivePoint2D(
+              smoothedFingersRef.current[cfg.id],
+              rawPos,
+              timestamp
+            );
+            smoothedFingersRef.current[cfg.id] = smoothed;
+            pos = { x: smoothed.x, y: smoothed.y };
+          } else {
+            smoothedFingersRef.current[cfg.id] = null;
+          }
 
           let fret = 0;
           let string = 0;
@@ -1916,6 +1986,8 @@ export default function ARCamera({
           });
         }
       });
+    } else {
+      smoothedFingersRef.current = {};
     }
 
     // 5. Detect Left-Hand Major / Minor Chord
@@ -1939,6 +2011,24 @@ export default function ARCamera({
       } else if (thumbTip) {
         pickX = thumbTip.x * width;
         pickY = thumbTip.y * height;
+      }
+
+      // Apply Adaptive 1-Euro Temporal Smoothing to pick position if enabled
+      if (smoothFingersRef.current && (pickX !== 0 || pickY !== 0)) {
+        const smoothedPick = smoothAdaptivePoint2D(
+          smoothedPickRef.current,
+          { x: pickX, y: pickY },
+          timestamp,
+          3.0,  // minCutoff (jitter threshold in px)
+          20.0, // fastCutoff (fast strum sweep threshold in px)
+          0.20, // minAlpha (heavy jitter suppression when hovering/holding still)
+          0.90  // maxAlpha (near-instantaneous response for fast strum attacks)
+        );
+        smoothedPickRef.current = smoothedPick;
+        pickX = smoothedPick.x;
+        pickY = smoothedPick.y;
+      } else {
+        smoothedPickRef.current = null;
       }
 
       // Add to pick motion trail
@@ -2517,6 +2607,7 @@ export default function ARCamera({
         strumStatusDesc = `Pick @ S${sPick.toFixed(1)} [${planeState}] (${modeBadge})`;
       }
     } else {
+      smoothedPickRef.current = null;
       const se = strumEngineRef.current;
       se.lastTime = timestamp;
       se.lastS = null;
@@ -4068,6 +4159,31 @@ export default function ARCamera({
                   <Focus size={12} />
                   <span>Optics {cameraDiagnostics?.isFocusLocked ? '🔒' : (cameraDiagnostics?.currentFocusMode === 'continuous' ? '⚠️' : '')}</span>
                 </button>
+
+                {/* Finger & Pick Temporal Smoothing Toggle */}
+                <button
+                  type="button"
+                  onClick={() => setSmoothFingers(prev => !prev)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '3px 8px',
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    borderRadius: '5px',
+                    border: smoothFingers ? '1px solid rgba(168, 85, 247, 0.6)' : '1px solid rgba(148, 163, 184, 0.3)',
+                    background: smoothFingers ? 'rgba(168, 85, 247, 0.15)' : 'rgba(148, 163, 184, 0.08)',
+                    color: smoothFingers ? '#c084fc' : '#94a3b8',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    transition: 'all 0.15s ease'
+                  }}
+                  title="Toggle Adaptive 1-Euro temporal smoothing for fretting fingers and strumming pick (kills landmark jitter while preserving fast motion)"
+                >
+                  <Sparkles size={12} />
+                  <span>Smooth: {smoothFingers ? 'ON' : 'OFF'}</span>
+                </button>
                 <a
                   href="/neck/index.html"
                   target="_blank"
@@ -4786,6 +4902,27 @@ export default function ARCamera({
             >
               <Settings size={14} style={{ color: showAdvancedControls ? 'var(--accent-cyan)' : 'var(--text-secondary)' }} />
               <span style={{ fontFamily: 'var(--font-mono)' }}>Options</span>
+            </button>
+
+            {/* Finger & Pick Temporal Smoothing Quick Toggle */}
+            <button
+              type="button"
+              className={`btn-secondary ${smoothFingers ? 'active' : ''}`}
+              onClick={() => setSmoothFingers(prev => !prev)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '6px 10px',
+                fontSize: '12px',
+                borderColor: smoothFingers ? 'rgba(192, 132, 252, 0.6)' : 'rgba(255, 255, 255, 0.15)',
+                background: smoothFingers ? 'rgba(168, 85, 247, 0.18)' : undefined,
+                color: smoothFingers ? '#c084fc' : 'var(--text-secondary)'
+              }}
+              title="Toggle 1-Euro adaptive temporal smoothing for fretting fingers and strumming pick (kills tracking jitter while keeping zero lag)"
+            >
+              <Sparkles size={14} style={{ color: smoothFingers ? '#c084fc' : 'var(--text-secondary)' }} />
+              <span style={{ fontFamily: 'var(--font-mono)' }}>Smooth: {smoothFingers ? 'ON' : 'OFF'}</span>
             </button>
 
             {/* ArUco Session Recorder Toggle */}
