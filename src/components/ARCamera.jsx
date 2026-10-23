@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings, Cpu, Music, Camera, SwitchCamera, Activity, Copy, Check, X, Award } from 'lucide-react';
+import { Play, Square, Video, Sliders, Maximize2, Minimize2, Volume2, VolumeX, Compass, Settings, Cpu, Music, Camera, SwitchCamera, Activity, Copy, Check, X, Award, Focus } from 'lucide-react';
 import { detectMarkers, DETECTOR_CONFIG } from '../utils/aruco_detector';
 import {
   getNeckGeometry,
+  solveGuitarBoardGeometry,
   getPerpAt,
   calculateFretAndStringFromGeometry,
   getFretPositionAndWidth,
@@ -14,6 +15,7 @@ import {
 } from '../utils/guitar_math';
 import { getStreamCameraInfo, getCalibrationFor, scaleCalibration, CALIBRATION_CHANGED_EVENT } from '../utils/camera_calibration';
 import CameraCalibrationPanel from './CameraCalibrationPanel';
+import CameraDiagnosticsModal from './CameraDiagnosticsModal';
 import { detectChordFromFingers, createChordSmoother } from '../utils/chord_detector';
 import { guitarAudio, GUITAR_INSTRUMENTS } from '../utils/guitar_audio';
 import { stereoTracker } from '../utils/stereo_tracker';
@@ -170,6 +172,7 @@ export default function ARCamera({
       `- **Webcam Stream**: ${perfTimings.res || captureResolution} (Processing: ${perfTimings.procRes || '640x360'})`,
       `- **Average FPS**: ${perfTimings.fpsAvg || fps} FPS (Live: ${fps} FPS)`,
       `- **Tracked**: ${perfTimings.markers} markers, ${perfTimings.hands} hand(s)`,
+      `- **Camera Optics**: ${cameraDiagnosticsRef.current?.label || 'Webcam'} (Focus: ${cameraDiagnosticsRef.current?.currentFocusMode || 'unknown'}, Exposure: ${cameraDiagnosticsRef.current?.currentExposureMode || 'unknown'})`,
       ``,
       `#### Pipeline Latency Breakdown (Averaged over 30 frames):`,
       `- ⏱️ **Total Frame Time**: ${perfTimings.total} ms ${totalMs <= target30Budget ? `(✅ Within 30 FPS budget, ${headroom30}ms headroom)` : `(⚠️ Exceeds 30 FPS budget by ${Math.abs(headroom30)}ms)`}`,
@@ -217,6 +220,7 @@ export default function ARCamera({
     strumModeRef.current = strumMode;
     localStorage.setItem('arguitar_strum_mode', strumMode);
   }, [strumMode]);
+
 
   // Song Play-Along Level: 1 = Beginner (Auto-Chord), 2 = Intermediate (Assist / Close Enough), 3 = Pro (Realistic)
   const [playLevel, setPlayLevel] = useState(() => {
@@ -348,6 +352,69 @@ export default function ARCamera({
   const [stereoStatus, setStereoStatus] = useState({ calibrated: false, baseline: '0', angle: '0', liveClearance: null });
   const [strumOffset, setStrumOffset] = useState(() => stereoTracker.strumPlaneOffsetCm);
   const [showPip, setShowPip] = useState(true);
+
+  // Camera optics & focus diagnostics
+  const [showCameraDiagnostics, setShowCameraDiagnostics] = useState(false);
+  const [cameraDiagnostics, setCameraDiagnostics] = useState(null);
+  const cameraDiagnosticsRef = useRef(null);
+  useEffect(() => {
+    cameraDiagnosticsRef.current = cameraDiagnostics;
+  }, [cameraDiagnostics]);
+
+  const inspectCameraTrack = (track) => {
+    if (!track) return null;
+    const label = track.label || 'Webcam';
+    const caps = typeof track.getCapabilities === 'function' ? track.getCapabilities() : {};
+    const sets = typeof track.getSettings === 'function' ? track.getSettings() : {};
+
+    const focusModes = caps.focusMode || [];
+    const currentFocusMode = sets.focusMode || (focusModes.length > 0 ? focusModes[0] : 'hardware/uvc');
+    const exposureModes = caps.exposureMode || [];
+    const currentExposureMode = sets.exposureMode || (exposureModes.length > 0 ? exposureModes[0] : 'auto');
+
+    return {
+      label,
+      width: sets.width || 0,
+      height: sets.height || 0,
+      frameRate: Math.round(sets.frameRate || 0),
+      facingMode: sets.facingMode || 'unknown',
+      focusModes,
+      currentFocusMode,
+      supportsSoftwareFocus: focusModes.length > 0,
+      isFocusLocked: currentFocusMode === 'manual',
+      exposureModes,
+      currentExposureMode,
+      focusDistance: sets.focusDistance,
+      capabilities: caps,
+      settings: sets
+    };
+  };
+
+  const handleLockCameraFocus = async () => {
+    const track = videoRef.current?.srcObject?.getVideoTracks()[0];
+    if (!track) return;
+    if (track.applyConstraints) {
+      await track.applyConstraints({
+        advanced: [{ focusMode: 'manual' }]
+      });
+      const updated = inspectCameraTrack(track);
+      setCameraDiagnostics(updated);
+      if (addLog) addLog('🔒 Camera focus locked to manual');
+    }
+  };
+
+  const handleContinuousCameraFocus = async () => {
+    const track = videoRef.current?.srcObject?.getVideoTracks()[0];
+    if (!track) return;
+    if (track.applyConstraints) {
+      await track.applyConstraints({
+        advanced: [{ focusMode: 'continuous' }]
+      });
+      const updated = inspectCameraTrack(track);
+      setCameraDiagnostics(updated);
+      if (addLog) addLog('🔄 Camera focus set to continuous');
+    }
+  };
 
   // Per-camera intrinsic calibration
   const [showCalibration, setShowCalibration] = useState(false);
@@ -911,6 +978,10 @@ export default function ARCamera({
           setSelectedDeviceId(settings.deviceId);
           selectedDeviceIdRef.current = settings.deviceId;
         }
+
+        const diag = inspectCameraTrack(track);
+        setCameraDiagnostics(diag);
+        console.log('[Camera Optics]', diag);
       }
 
       // Enumerate devices now that permission has unlocked camera labels
@@ -1455,8 +1526,12 @@ export default function ARCamera({
         }
       }
 
-      // Solve raw neck geometry from detected markers
-      const rawNeck = getNeckGeometry(markers, neckWidthScaleRef.current, markerPoses, fretScaleLengthRef.current);
+      // Solve raw neck geometry using the ArUco Board Joint 3D PnP Solver:
+      // Combines all visible marker corners (up to 20 corners across 58cm) into a single rigid 3D pose
+      const { camMatrix: curCamMatrix, distCoef: curDistCoef } = cameraMatsRef.current;
+      const rawNeck = (cv && curCamMatrix && curDistCoef)
+        ? (solveGuitarBoardGeometry(cv, markers, curCamMatrix, curDistCoef, fretScaleLengthRef.current, neckWidthScaleRef.current) || getNeckGeometry(markers, neckWidthScaleRef.current, markerPoses, fretScaleLengthRef.current))
+        : getNeckGeometry(markers, neckWidthScaleRef.current, markerPoses, fretScaleLengthRef.current);
       recRawNeck = rawNeck;
 
       if (rawNeck) {
@@ -3208,7 +3283,7 @@ export default function ARCamera({
     const hudX = 16;
     const hudY = 65;
     const hudW = 285;
-    const hudH = geometry?.debug ? 152 : 75;
+    const hudH = geometry?.debug ? 168 : 88;
 
     ctx.save();
     ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
@@ -3224,9 +3299,10 @@ export default function ARCamera({
     ctx.stroke();
 
     // Card Header
-    drawUnmirroredText(ctx, '🛠️ ARUCO ALIGNMENT DEBUGGER', hudX + 12, hudY + 14, {
+    const isBoard = geometry?.solver === 'board';
+    drawUnmirroredText(ctx, isBoard ? '🧩 ARUCO BOARD SOLVER' : '🛠️ ARUCO ALIGNMENT DEBUGGER', hudX + 12, hudY + 14, {
       font: 'bold 11px monospace',
-      fillStyle: '#38bdf8',
+      fillStyle: isBoard ? '#c084fc' : '#38bdf8',
       align: 'left',
       baseline: 'top'
     });
@@ -3243,10 +3319,12 @@ export default function ARCamera({
     if (geometry?.debug) {
       const { debug } = geometry;
       const isShort = debug.spanCm < 20;
-      const baselineText = `Baseline: M${debug.firstId} (${debug.firstCm}cm) -> M${debug.lastId} (${debug.lastCm}cm)`;
+      const baselineText = isBoard
+        ? `Joint PnP: ${debug.numCorners} corners across ${debug.spanCm.toFixed(1)}cm`
+        : `Baseline: M${debug.firstId} (${debug.firstCm}cm) -> M${debug.lastId} (${debug.lastCm}cm)`;
       drawUnmirroredText(ctx, baselineText, hudX + 12, hudY + 46, {
         font: '10px monospace',
-        fillStyle: '#facc15',
+        fillStyle: isBoard ? '#e9d5ff' : '#facc15',
         align: 'left',
         baseline: 'top'
       });
@@ -3295,10 +3373,32 @@ export default function ARCamera({
         align: 'left',
         baseline: 'top'
       });
+
+      const diag = cameraDiagnosticsRef.current;
+      const focusText = diag
+        ? `Focus: ${diag.isFocusLocked ? '🔒 Locked (Manual)' : (diag.currentFocusMode === 'continuous' ? '⚠️ Continuous (AF)' : 'Hardware / UVC')}`
+        : 'Focus: Active';
+      drawUnmirroredText(ctx, focusText, hudX + 12, hudY + 142, {
+        font: '10px monospace',
+        fillStyle: diag?.isFocusLocked ? '#86efac' : (diag?.currentFocusMode === 'continuous' ? '#fbbf24' : '#38bdf8'),
+        align: 'left',
+        baseline: 'top'
+      });
     } else {
       drawUnmirroredText(ctx, '⚠️ Need >= 2 markers to track guitar axis!', hudX + 12, hudY + 46, {
         font: 'bold 10px monospace',
         fillStyle: '#ef4444',
+        align: 'left',
+        baseline: 'top'
+      });
+
+      const diag = cameraDiagnosticsRef.current;
+      const focusText = diag
+        ? `Focus: ${diag.isFocusLocked ? '🔒 Locked' : (diag.currentFocusMode === 'continuous' ? '⚠️ Continuous AF' : 'Hardware / UVC')}`
+        : 'Focus: Active';
+      drawUnmirroredText(ctx, focusText, hudX + 12, hudY + 62, {
+        font: '10px monospace',
+        fillStyle: diag?.isFocusLocked ? '#86efac' : (diag?.currentFocusMode === 'continuous' ? '#fbbf24' : '#38bdf8'),
         align: 'left',
         baseline: 'top'
       });
@@ -3622,6 +3722,18 @@ export default function ARCamera({
             />
           )}
 
+          {/* Camera Optics & Focus Diagnostics Modal */}
+          {showCameraDiagnostics && (
+            <CameraDiagnosticsModal
+              isOpen={showCameraDiagnostics}
+              onClose={() => setShowCameraDiagnostics(false)}
+              diagnostics={cameraDiagnostics}
+              onLockFocus={handleLockCameraFocus}
+              onContinuousFocus={handleContinuousCameraFocus}
+              isMobile={isMobileDevice()}
+            />
+          )}
+
           {/* Detailed Performance Profiler Dashboard (Toggled via Profiler button or HUD) */}
           {showProfiler && (
             <div style={{
@@ -3929,6 +4041,32 @@ export default function ARCamera({
                   title="Calibrate camera lens (focal length & distortion) with a printed marker board"
                 >
                   📐 Calibrate {calibStatus.cam1 ? '✓' : '·'}{stereoEnabled ? (calibStatus.cam2 ? '✓' : '·') : ''}
+                </button>
+
+                {/* Camera Optics & Focus Diagnostic */}
+                <button
+                  type="button"
+                  onClick={() => setShowCameraDiagnostics(true)}
+                  disabled={!cameraActive}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '3px 8px',
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    borderRadius: '5px',
+                    border: cameraDiagnostics?.isFocusLocked ? '1px solid rgba(74, 222, 128, 0.5)' : (cameraDiagnostics?.currentFocusMode === 'continuous' ? '1px solid rgba(245, 158, 11, 0.5)' : '1px solid rgba(56, 189, 248, 0.4)'),
+                    background: cameraDiagnostics?.isFocusLocked ? 'rgba(74, 222, 128, 0.12)' : (cameraDiagnostics?.currentFocusMode === 'continuous' ? 'rgba(245, 158, 11, 0.12)' : 'rgba(56, 189, 248, 0.1)'),
+                    color: cameraDiagnostics?.isFocusLocked ? '#86efac' : (cameraDiagnostics?.currentFocusMode === 'continuous' ? '#fbbf24' : '#38bdf8'),
+                    cursor: cameraActive ? 'pointer' : 'not-allowed',
+                    opacity: cameraActive ? 1 : 0.5,
+                    whiteSpace: 'nowrap'
+                  }}
+                  title="Inspect camera focus mode, exposure, and optics diagnostics"
+                >
+                  <Focus size={12} />
+                  <span>Optics {cameraDiagnostics?.isFocusLocked ? '🔒' : (cameraDiagnostics?.currentFocusMode === 'continuous' ? '⚠️' : '')}</span>
                 </button>
                 <a
                   href="/neck/index.html"

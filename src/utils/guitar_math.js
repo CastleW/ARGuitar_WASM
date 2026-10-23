@@ -531,8 +531,201 @@ export function getNeckGeometry(markers, neckWidthScale = 1.6, markerPoses = nul
     totalFretLength: effectiveTotalLength,
     detectedMarkers: detected,
     neckWidthScale,
+    solver: 'pairwise',
     debug: guitar.debug
   };
+}
+
+/**
+ * Solve full 6-DOF 3D pose of the guitar neck treating it as a rigid ArUco Board.
+ * Combines all visible marker corners (4 to 20 points) across up to 58 cm into a single joint PnP solve.
+ * This eliminates fret jitter and keeps the entire neck locked even when hands occlude markers.
+ *
+ * @param {object} cv - OpenCV instance
+ * @param {object} markers - Map of detected markers { [id]: { id, corners, center } }
+ * @param {object} camMatrix - Camera intrinsic matrix (cv.Mat 3x3)
+ * @param {object} distCoef - Distortion coefficients (cv.Mat 1x5)
+ * @param {number} [totalFretLength=51.9] - Physical cm position of strum zone end
+ * @param {number} [neckWidthScale=1.6]
+ * @returns {object|null} Unified neck geometry or null if solve fails
+ */
+export function solveGuitarBoardGeometry(cv, markers, camMatrix, distCoef, totalFretLength = 51.9, neckWidthScale = 1.6) {
+  if (!cv || !markers || !camMatrix || !distCoef) return null;
+
+  const effectiveTotalLength = totalFretLength || TOTAL_FRET_LENGTH_IN_CM;
+  const MARKER_SIZE_CM = 3.1;
+  const half = MARKER_SIZE_CM / 2.0;
+
+  // 1. Collect 3D object points and 2D image points of all visible markers
+  const objPts = [];
+  const imgPts = [];
+  const usedMarkers = [];
+
+  for (const [idStr, posCm] of Object.entries(ARUCO_MARKER_MAP)) {
+    const id = parseInt(idStr, 10);
+    const m = markers[id];
+    if (m && m.corners && m.corners.length >= 4) {
+      usedMarkers.push({ id, cm: posCm, corners: m.corners, center: m.center });
+      // 3D corners in guitar board space (Nut center is [0, 0, 0])
+      // TL, TR, BR, BL matching canonical ArUco orientation
+      objPts.push(
+        posCm - half, -half, 0.0,
+        posCm + half, -half, 0.0,
+        posCm + half,  half, 0.0,
+        posCm - half,  half, 0.0
+      );
+      for (let i = 0; i < 4; i++) {
+        imgPts.push(m.corners[i].x, m.corners[i].y);
+      }
+    }
+  }
+
+  const numPoints = objPts.length / 3;
+  if (numPoints < 4) return null;
+
+  usedMarkers.sort((a, b) => a.cm - b.cm);
+
+  let objMat = null;
+  let imgMat = null;
+  let rvec = null;
+  let tvec = null;
+  let testMat = null;
+  let projMat = null;
+  let rotMat = null;
+
+  try {
+    objMat = cv.matFromArray(numPoints, 3, cv.CV_32F, objPts);
+    imgMat = cv.matFromArray(numPoints, 1, cv.CV_32FC2, imgPts);
+    rvec = new cv.Mat();
+    tvec = new cv.Mat();
+
+    const method = numPoints >= 8
+      ? (cv.SOLVEPNP_ITERATIVE || 0)
+      : (cv.SOLVEPNP_IPPE_SQUARE !== undefined ? cv.SOLVEPNP_IPPE_SQUARE : (cv.SOLVEPNP_ITERATIVE || 0));
+
+    const ok = cv.solvePnP(objMat, imgMat, camMatrix, distCoef, rvec, tvec, false, method);
+    if (!ok) return null;
+
+    const tz = tvec.doubleAt(2);
+    if (tz < 15 || tz > 350) return null;
+
+    // 2. Project guitar board landmarks into 2D screen pixels
+    // Landmark 0: Nut Center [0.0, 0.0, 0.0]
+    // Landmark 1: Nut Top (High e) [0.0, -2.3, 0.0]
+    // Landmark 2: Nut Bottom (Low E) [0.0, +2.3, 0.0]
+    // Landmark 3: End Center [effectiveTotalLength, 0.0, 0.0]
+    // Landmark 4: End Top [effectiveTotalLength, -2.3 * 1.15, 0.0]
+    // Landmark 5: End Bottom [effectiveTotalLength, +2.3 * 1.15, 0.0]
+    const landmarks = [
+      0.0,  0.0, 0.0,
+      0.0, -2.3, 0.0,
+      0.0,  2.3, 0.0,
+      effectiveTotalLength,  0.0, 0.0,
+      effectiveTotalLength, -2.3 * 1.15, 0.0,
+      effectiveTotalLength,  2.3 * 1.15, 0.0
+    ];
+
+    testMat = cv.matFromArray(6, 3, cv.CV_32F, landmarks);
+    projMat = new cv.Mat();
+    cv.projectPoints(testMat, rvec, tvec, camMatrix, distCoef, projMat);
+
+    const start = { x: projMat.floatAt(0, 0), y: projMat.floatAt(0, 1) };
+    const pNutTop = { x: projMat.floatAt(1, 0), y: projMat.floatAt(1, 1) };
+    const pNutBottom = { x: projMat.floatAt(2, 0), y: projMat.floatAt(2, 1) };
+
+    const end = { x: projMat.floatAt(3, 0), y: projMat.floatAt(3, 1) };
+    const pEndTop = { x: projMat.floatAt(4, 0), y: projMat.floatAt(4, 1) };
+    const pEndBottom = { x: projMat.floatAt(5, 0), y: projMat.floatAt(5, 1) };
+
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 10) return null;
+
+    const perpX = -dy / len;
+    const perpY = dx / len;
+    const defaultPerp = { x: perpX, y: perpY };
+
+    // Unit cross vectors at Nut and End from 3D projected top-to-bottom points
+    const nutCrossDx = pNutBottom.x - pNutTop.x;
+    const nutCrossDy = pNutBottom.y - pNutTop.y;
+    const nutCrossLen = Math.hypot(nutCrossDx, nutCrossDy);
+    let perpNut = nutCrossLen > 0 ? { x: nutCrossDx / nutCrossLen, y: nutCrossDy / nutCrossLen } : defaultPerp;
+
+    const endCrossDx = pEndBottom.x - pEndTop.x;
+    const endCrossDy = pEndBottom.y - pEndTop.y;
+    const endCrossLen = Math.hypot(endCrossDx, endCrossDy);
+    let perpEnd = endCrossLen > 0 ? { x: endCrossDx / endCrossLen, y: endCrossDy / endCrossLen } : defaultPerp;
+
+    if (perpNut.x * defaultPerp.x + perpNut.y * defaultPerp.y < 0) {
+      perpNut = { x: -perpNut.x, y: -perpNut.y };
+    }
+    if (perpEnd.x * defaultPerp.x + perpEnd.y * defaultPerp.y < 0) {
+      perpEnd = { x: -perpEnd.x, y: -perpEnd.y };
+    }
+
+    const nutNeckWidth = Math.max(10, nutCrossLen * (neckWidthScale / 1.6));
+    const endNeckWidth = Math.max(12, endCrossLen * (neckWidthScale / 1.6));
+
+    rotMat = new cv.Mat();
+    cv.Rodrigues(rvec, rotMat);
+    const r20 = rotMat.doubleAt(2, 0); // Z-slope along guitar axis
+    const zNut = tz;
+    const zEnd = r20 * effectiveTotalLength + tz;
+    let depthRatio = (zNut > 0 && zEnd > 0) ? (zEnd / zNut) : 0.93;
+    depthRatio = Math.max(0.40, Math.min(2.20, depthRatio));
+
+    const firstM = usedMarkers[0];
+    const lastM = usedMarkers[usedMarkers.length - 1];
+    const spanCm = lastM.cm - firstM.cm;
+
+    return {
+      start,
+      end,
+      dx,
+      dy,
+      len,
+      perpX,
+      perpY,
+      perpNut,
+      perpEnd,
+      nutNeckWidth,
+      endNeckWidth,
+      depthRatio,
+      totalFretLength: effectiveTotalLength,
+      detectedMarkers: usedMarkers,
+      neckWidthScale,
+      solver: 'board',
+      rvec: [rvec.doubleAt(0), rvec.doubleAt(1), rvec.doubleAt(2)],
+      tvec: [tvec.doubleAt(0), tvec.doubleAt(1), tvec.doubleAt(2)],
+      debug: {
+        mode: 'board',
+        firstId: firstM.id,
+        lastId: lastM.id,
+        firstCm: firstM.cm,
+        lastCm: lastM.cm,
+        spanCm,
+        numCorners: numPoints,
+        markersUsed: usedMarkers.map(m => m.id),
+        uNut: 0.0,
+        uEnd: 1.0,
+        k: depthRatio,
+        kExtrap: depthRatio,
+        isPinnedEnd: true
+      }
+    };
+  } catch (err) {
+    console.warn('[Guitar Board Solver] Error solving board pose:', err);
+    return null;
+  } finally {
+    if (objMat) objMat.delete();
+    if (imgMat) imgMat.delete();
+    if (rvec) rvec.delete();
+    if (tvec) tvec.delete();
+    if (testMat) testMat.delete();
+    if (projMat) projMat.delete();
+    if (rotMat) rotMat.delete();
+  }
 }
 
 /**
