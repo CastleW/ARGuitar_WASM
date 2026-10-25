@@ -12,7 +12,7 @@ Level 3 - as with a real guitar, you need to make the real fret shapes.  The tra
 
 You'll need to print out the PDF file and make your own AR Guitar to use with the app.
 
-The App is deployed to: https://ar-guitar-wasm.vercel.app/
+The App is deployed to: https://arguitar.com/
 
 ## 🖨️ Building Your AR Guitar Neck (Printable Kit)
 
