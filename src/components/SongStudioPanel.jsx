@@ -10,7 +10,7 @@ export default function SongStudioPanel() {
   const [tempoMultiplier, setTempoMultiplier] = useState(songEngine.tempoMultiplier);
   const [backingVolume, setBackingVolume] = useState(songEngine.backingVolume);
   const [isMetronomeEnabled, setIsMetronomeEnabled] = useState(songEngine.isMetronomeEnabled);
-  const [playLevel, setPlayLevel] = useState(songEngine.playLevel || 1);
+  const [playLevel, setPlayLevel] = useState(songEngine.playLevel || 2);
 
   useEffect(() => {
     const unsubscribe = songEngine.subscribe((eventType, payload) => {

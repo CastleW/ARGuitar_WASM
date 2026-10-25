@@ -375,8 +375,8 @@ export class SongEngine {
     this.scheduleAheadSec = 0.12;
 
     // Difficulty Level: 1 = Beginner (Auto-Chord), 2 = Intermediate (Assist / Close Enough), 3 = Pro (Realistic)
-    const savedLevel = typeof localStorage !== 'undefined' ? parseInt(localStorage.getItem('arguitar_play_level'), 10) : 1;
-    this.playLevel = [1, 2, 3].includes(savedLevel) ? savedLevel : 1;
+    const savedLevel = typeof localStorage !== 'undefined' ? parseInt(localStorage.getItem('arguitar_play_level'), 10) : 2;
+    this.playLevel = [1, 2, 3].includes(savedLevel) ? savedLevel : 2;
 
     // Hit evaluation and scoring
     this.score = 0;

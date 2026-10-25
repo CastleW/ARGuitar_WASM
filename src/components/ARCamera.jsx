@@ -256,9 +256,9 @@ export default function ARCamera({
     guitarAudio.setMuted(!audioEnabled);
   }, [audioEnabled]);
 
-  // Strum mode: 'smart' (Smart Depth Gate), 'down' (Downstrokes Only), 'both' (Alternating Down & Up)
+  // Strum mode: 'down' (Downstrokes Only), 'smart' (Smart Depth Gate), 'both' (Alternating Down & Up)
   const [strumMode, setStrumMode] = useState(() => {
-    return localStorage.getItem('arguitar_strum_mode') || 'smart';
+    return localStorage.getItem('arguitar_strum_mode') || 'down';
   });
   const strumModeRef = useRef(strumMode);
   useEffect(() => {
@@ -282,7 +282,7 @@ export default function ARCamera({
 
   // Song Play-Along Level: 1 = Beginner (Auto-Chord), 2 = Intermediate (Assist / Close Enough), 3 = Pro (Realistic)
   const [playLevel, setPlayLevel] = useState(() => {
-    return songEngine.playLevel || 1;
+    return songEngine.playLevel || 2;
   });
   const playLevelRef = useRef(playLevel);
   useEffect(() => {
@@ -2531,7 +2531,7 @@ export default function ARCamera({
             const isSongActive = songEngine.isPlaying;
             const targetChord = isSongActive ? songEngine.getTargetChord() : null;
             const targetPlayable = targetChord ? getPlayableChordObject(targetChord) : null;
-            const currentLevel = playLevelRef.current || 1;
+            const currentLevel = playLevelRef.current || 2;
 
             let chordToPlay = null;
             let isAssistHit = false;
@@ -4890,7 +4890,7 @@ export default function ARCamera({
               type="button"
               className="btn-secondary"
               onClick={() => {
-                const modes = ['smart', 'down', 'both'];
+                const modes = ['down', 'smart', 'both'];
                 const nextIdx = (modes.indexOf(strumMode) + 1) % modes.length;
                 setStrumMode(modes[nextIdx]);
               }}
@@ -4900,14 +4900,14 @@ export default function ARCamera({
                 gap: '6px',
                 padding: '6px 10px',
                 fontSize: '12px',
-                borderColor: strumMode === 'smart' ? '#06b6d4' : (strumMode === 'down' ? '#f59e0b' : '#a855f7')
+                borderColor: strumMode === 'down' ? '#f59e0b' : (strumMode === 'smart' ? '#06b6d4' : '#a855f7')
               }}
-              title="Click to cycle strum mode: Smart Strum (Play upstrokes, mute air returns) -> Down Only -> Down & Up"
+              title="Click to cycle strum mode: Down Only -> Smart Strum (Play upstrokes, mute air returns) -> Down & Up"
             >
-              <Compass size={14} color={strumMode === 'smart' ? '#06b6d4' : (strumMode === 'down' ? '#f59e0b' : '#a855f7')} />
+              <Compass size={14} color={strumMode === 'down' ? '#f59e0b' : (strumMode === 'smart' ? '#06b6d4' : '#a855f7')} />
               <span style={{ fontFamily: 'var(--font-mono)' }}>
-                {strumMode === 'smart' && '🎯 Smart Strum'}
                 {strumMode === 'down' && '⬇️ Down Only'}
+                {strumMode === 'smart' && '🎯 Smart Strum'}
                 {strumMode === 'both' && '⇅ Down & Up'}
               </span>
             </button>

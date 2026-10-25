@@ -17,7 +17,7 @@ export default function SongHighway({
   const [isMetronomeEnabled, setIsMetronomeEnabled] = useState(songEngine.isMetronomeEnabled);
   const [score, setScore] = useState(songEngine.score);
   const [combo, setCombo] = useState(songEngine.combo);
-  const [playLevel, setPlayLevel] = useState(songEngine.playLevel || 1);
+  const [playLevel, setPlayLevel] = useState(songEngine.playLevel || 2);
   const [hitFeedback, setHitFeedback] = useState(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
 
