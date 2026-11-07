@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# ArUco session recordings (large video + metrics files)
+recordings/
