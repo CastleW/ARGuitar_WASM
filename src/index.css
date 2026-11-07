@@ -49,6 +49,81 @@ body {
     radial-gradient(at 0% 0%, rgba(168, 85, 247, 0.15) 0px, transparent 50%),
     radial-gradient(at 100% 100%, rgba(6, 182, 212, 0.1) 0px, transparent 50%);
   background-attachment: fixed;
+  transition: background-color 0.3s ease;
+}
+
+/* ==========================================================================
+   THEME DEFINITIONS
+   ========================================================================== */
+
+/* Acoustic Lounge (Warm mahogany wood, amber glow, cozy studio vibe) */
+[data-theme="acoustic"] {
+  --bg-primary: #120e0c;
+  --bg-secondary: rgba(36, 26, 20, 0.8);
+  --bg-tertiary: rgba(56, 40, 30, 0.6);
+  --accent-purple: #f59e0b;
+  --accent-cyan: #d97706;
+  --border-color: rgba(245, 158, 11, 0.15);
+  --border-glow: rgba(245, 158, 11, 0.25);
+  --shadow-premium: 0 10px 30px -10px rgba(180, 83, 9, 0.5),
+    0 1px 0 1px rgba(255, 255, 255, 0.05) inset;
+}
+
+body[data-theme="acoustic"] {
+  background-image:
+    radial-gradient(at 0% 0%, rgba(245, 158, 11, 0.16) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(217, 119, 6, 0.12) 0px, transparent 50%);
+}
+
+[data-theme="acoustic"] .title-gradient {
+  background: linear-gradient(135deg, #fff 25%, #f59e0b 70%, #d97706);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+[data-theme="acoustic"] .btn-premium {
+  background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+  box-shadow: 0 4px 15px rgba(217, 119, 6, 0.25);
+}
+
+[data-theme="acoustic"] .btn-premium:hover {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  box-shadow: 0 6px 20px rgba(245, 158, 11, 0.4);
+}
+
+/* Nordic Minimalist (Cool slate, ice-blue, clean distraction-free practice) */
+[data-theme="nordic"] {
+  --bg-primary: #0b0f19;
+  --bg-secondary: rgba(18, 26, 42, 0.8);
+  --bg-tertiary: rgba(30, 44, 70, 0.6);
+  --accent-purple: #38bdf8;
+  --accent-cyan: #e2e8f0;
+  --border-color: rgba(255, 255, 255, 0.1);
+  --border-glow: rgba(56, 189, 248, 0.2);
+  --shadow-premium: 0 10px 30px -10px rgba(15, 23, 42, 0.8),
+    0 1px 0 1px rgba(255, 255, 255, 0.05) inset;
+}
+
+body[data-theme="nordic"] {
+  background-image:
+    radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.14) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(148, 163, 184, 0.08) 0px, transparent 50%);
+}
+
+[data-theme="nordic"] .title-gradient {
+  background: linear-gradient(135deg, #fff 30%, #38bdf8 70%, #e2e8f0);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+[data-theme="nordic"] .btn-premium {
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+  box-shadow: 0 4px 15px rgba(2, 132, 199, 0.25);
+}
+
+[data-theme="nordic"] .btn-premium:hover {
+  background: linear-gradient(135deg, #38bdf8 0%, #0284c7 100%);
+  box-shadow: 0 6px 20px rgba(56, 189, 248, 0.35);
 }
 
 /* Scrollbar Customization */
@@ -156,6 +231,61 @@ h6 {
 .btn-secondary.active {
   background: rgba(6, 182, 212, 0.2);
   border-color: var(--accent-cyan);
+  box-shadow: 0 0 10px rgba(6, 182, 212, 0.2);
+}
+
+/* Keyboard Shortcut Badges */
+kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text-secondary);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
+  line-height: 1;
+}
+
+.header-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.header-action-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px);
+}
+
+.header-action-btn.primary-highlight {
+  border-color: rgba(168, 85, 247, 0.4);
+  background: rgba(168, 85, 247, 0.12);
+  color: #d8b4fe;
+}
+
+.header-action-btn.primary-highlight:hover {
+  background: rgba(168, 85, 247, 0.22);
+  border-color: var(--accent-purple);
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.25);
+}
+
+.header-action-btn.active {
+  border-color: var(--accent-cyan);
+  background: rgba(6, 182, 212, 0.16);
+  color: #67e8f9;
   box-shadow: 0 0 10px rgba(6, 182, 212, 0.2);
 }
 

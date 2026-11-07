@@ -21,6 +21,7 @@ import { guitarAudio, GUITAR_INSTRUMENTS } from '../utils/guitar_audio';
 import { stereoTracker } from '../utils/stereo_tracker';
 import SongHighway from './SongHighway';
 import RecorderPanel from './RecorderPanel';
+import GuitarConfigDrawer from './GuitarConfigDrawer';
 import { SessionRecorder, saveRecordingFiles, buildFrameRecord, round1, round3 } from '../utils/session_recorder';
 import { songEngine, getPlayableChordObject, isChordCloseEnough } from '../utils/song_engine';
 import { gpuPreprocessor } from '../utils/gpu_preprocessor';
@@ -101,7 +102,10 @@ export default function ARCamera({
   onCameraSizeChange,
   showSongStudio = false,
   onToggleSongStudio,
-  onOpenWalkthrough
+  onOpenWalkthrough,
+  theme = 'cyber',
+  vfxMode = 'calm',
+  onVfxModeChange
 }) {
   const containerRef = useRef(null);
   const videoRef = useRef(null);
@@ -112,6 +116,13 @@ export default function ARCamera({
   const [mediaPipeLoaded, setMediaPipeLoaded] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showAdvancedControls, setShowAdvancedControls] = useState(false);
+
+  // Theme & VFX Mode synchronisation refs for 60fps canvas loop
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
+  const vfxModeRef = useRef(vfxMode);
+  vfxModeRef.current = vfxMode;
+  const strumVfxRef = useRef({ particles: [], ripples: [] });
 
   // Performance cache refs
   const cameraMatsRef = useRef({ width: 0, height: 0, camMatrix: null, distCoef: null });
@@ -297,6 +308,13 @@ export default function ARCamera({
   const handleInstrumentChange = async (instId) => {
     setGuitarInstrument(instId);
     await guitarAudio.setInstrument(instId);
+    if (onVfxModeChange) {
+      if (instId === 'acoustic') {
+        onVfxModeChange('calm');
+      } else if (instId === 'distortion' || instId === 'electric_clean') {
+        onVfxModeChange('exciting');
+      }
+    }
   };
 
   // Palm Mute (tight staccato decay + dampening)
@@ -826,6 +844,28 @@ export default function ARCamera({
       if (recorder.isRecording) recorder.stop();
     };
   }, [recorder]);
+
+  // Listen for custom event or 'O' key to toggle Guitar Config Drawer
+  useEffect(() => {
+    const handleToggleOptions = () => {
+      setShowAdvancedControls(prev => !prev);
+    };
+    const onKey = (e) => {
+      if (e.key === 'o' || e.key === 'O') {
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        const tag = e.target?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
+        e.preventDefault();
+        setShowAdvancedControls(prev => !prev);
+      }
+    };
+    window.addEventListener('toggle-guitar-options', handleToggleOptions);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('toggle-guitar-options', handleToggleOptions);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, []);
 
   // Secondary camera stream management for Stereo 3D tracking
   const startSecondaryCamera = async (deviceId) => {
@@ -2518,6 +2558,43 @@ export default function ARCamera({
               vibratingStringsRef.current[str] = timestamp;
             });
 
+            // Trigger Calm or Exciting Strum VFX
+            const activeVfx = vfxModeRef.current;
+            const currentTh = themeRef.current;
+            const sx = pickX || (width / 2);
+            const sy = pickY || (height / 2);
+
+            if (activeVfx === 'calm') {
+              // Add gentle harmonic expanding water ripple
+              strumVfxRef.current.ripples.push({
+                x: sx,
+                y: sy,
+                startTime: timestamp,
+                duration: 650,
+                maxRadius: 65 + newlyCrossed.length * 7,
+                color: currentTh === 'acoustic' ? 'rgba(245, 158, 11,' : (currentTh === 'nordic' ? 'rgba(56, 189, 248,' : 'rgba(6, 182, 212,')
+              });
+            } else {
+              // Add electric sparks / overdrive burst
+              const sparkCount = 8 + newlyCrossed.length * 3;
+              for (let i = 0; i < sparkCount; i++) {
+                const angle = (Math.PI * 2 * i) / sparkCount + (Math.random() - 0.5) * 0.8;
+                const spd = 2.5 + Math.random() * 5.5;
+                strumVfxRef.current.particles.push({
+                  x: sx,
+                  y: sy,
+                  vx: Math.cos(angle) * spd,
+                  vy: Math.sin(angle) * spd,
+                  life: 1.0,
+                  decay: 0.04 + Math.random() * 0.03,
+                  size: 2.2 + Math.random() * 3.0,
+                  color: currentTh === 'acoustic' 
+                    ? (Math.random() > 0.5 ? '#f59e0b' : '#ef4444')
+                    : (currentTh === 'nordic' ? (Math.random() > 0.5 ? '#38bdf8' : '#ffffff') : (Math.random() > 0.5 ? '#a855f7' : '#06b6d4'))
+                });
+              }
+            }
+
             const currentFretted = {};
             trackedFingers.forEach(f => {
               if (f.isActive && f.string && f.fret) {
@@ -3225,6 +3302,8 @@ export default function ARCamera({
     const nowTime = performance.now();
     const vNut = getPerpAt(0.0, geometry);
     const vBridge = getPerpAt(tBridge, geometry);
+    const isCalm = vfxModeRef.current === 'calm';
+    const currentTheme = themeRef.current;
 
     for (let s = 1; s <= 6; ++s) {
       const tString = ((s - 1) / 5 - 0.5) * 0.88;
@@ -3239,24 +3318,110 @@ export default function ARCamera({
       // Check if this string is currently vibrating from a recent pick/strum
       const lastStrumTime = vibratingStringsRef.current[s] || 0;
       const timeSinceStrum = nowTime - lastStrumTime;
-      const isVibrating = timeSinceStrum < 350;
+      const isVibrating = timeSinceStrum < (isCalm ? 460 : 380);
 
       ctx.save();
+      const stringLen = Math.hypot(xBridge - x1, yBridge - y1);
+      const perpX = stringLen > 0 ? -(yBridge - y1) / stringLen : 0;
+      const perpY = stringLen > 0 ? (xBridge - x1) / stringLen : 0;
+
       if (isVibrating) {
-        const vibFactor = 1 - timeSinceStrum / 350;
-        ctx.shadowColor = '#f59e0b';
-        ctx.shadowBlur = 14 * vibFactor;
-        ctx.lineWidth = (1.5 + (s * 0.45)) + (4 * vibFactor);
-        ctx.strokeStyle = `rgba(254, 215, 170, ${0.85 + 0.15 * vibFactor})`;
+        const vibFactor = 1 - timeSinceStrum / (isCalm ? 460 : 380);
+        
+        if (isCalm) {
+          // Calm Mode: Warm harmonic resonance wave (soft golden/amber glow)
+          ctx.shadowColor = currentTheme === 'acoustic' ? '#f59e0b' : (currentTheme === 'nordic' ? '#38bdf8' : '#06b6d4');
+          ctx.shadowBlur = 10 * vibFactor;
+          ctx.lineWidth = (1.5 + (s * 0.4)) + (2.5 * vibFactor);
+          ctx.strokeStyle = currentTheme === 'acoustic'
+            ? `rgba(254, 215, 170, ${0.9 + 0.1 * vibFactor})`
+            : `rgba(224, 242, 254, ${0.9 + 0.1 * vibFactor})`;
+
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          const segments = 16;
+          for (let i = 1; i < segments; i++) {
+            const u = i / segments;
+            const wave = Math.sin(Math.PI * u) * Math.sin(timeSinceStrum * 0.045 + s * 0.85);
+            const disp = vibFactor * 6.5 * wave;
+            const px = x1 + u * (xBridge - x1) + disp * perpX;
+            const py = y1 + u * (yBridge - y1) + disp * perpY;
+            ctx.lineTo(px, py);
+          }
+          ctx.lineTo(xBridge, yBridge);
+          ctx.stroke();
+        } else {
+          // Exciting Mode: Electric Overdrive (sharp vibration with electric spark harmonics)
+          ctx.shadowColor = currentTheme === 'acoustic' ? '#ef4444' : (currentTheme === 'nordic' ? '#38bdf8' : '#a855f7');
+          ctx.shadowBlur = 16 * vibFactor;
+          ctx.lineWidth = (1.5 + (s * 0.45)) + (4 * vibFactor);
+          ctx.strokeStyle = `rgba(255, 255, 255, ${0.95 + 0.05 * vibFactor})`;
+
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          const segments = 20;
+          for (let i = 1; i < segments; i++) {
+            const u = i / segments;
+            const harmonic = Math.sin(timeSinceStrum * 0.075 + s * 1.5) + 0.35 * Math.sin(timeSinceStrum * 0.18);
+            const disp = vibFactor * 9.5 * Math.sin(Math.PI * u) * harmonic;
+            const px = x1 + u * (xBridge - x1) + disp * perpX;
+            const py = y1 + u * (yBridge - y1) + disp * perpY;
+            ctx.lineTo(px, py);
+          }
+          ctx.lineTo(xBridge, yBridge);
+          ctx.stroke();
+        }
       } else {
         ctx.lineWidth = 1.2 + (s * 0.45);
         ctx.strokeStyle = `rgba(255, 255, 255, ${0.45 + (s / 10)})`;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(xBridge, yBridge);
+        ctx.stroke();
       }
+      ctx.restore();
+    }
 
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(xBridge, yBridge);
-      ctx.stroke();
+    // 4. Render Active Strum VFX (Calm harmonic ripples & Exciting electric sparks)
+    const vfx = strumVfxRef.current;
+    
+    // Ripples (Calm Mode)
+    if (vfx && vfx.ripples && vfx.ripples.length > 0) {
+      ctx.save();
+      vfx.ripples = vfx.ripples.filter(rip => {
+        const elapsed = nowTime - rip.startTime;
+        if (elapsed >= rip.duration) return false;
+        const progress = elapsed / rip.duration;
+        const r = progress * rip.maxRadius;
+        const alpha = (1 - progress) * 0.65;
+        ctx.strokeStyle = `${rip.color}${alpha})`;
+        ctx.lineWidth = 2.5 * (1 - progress);
+        ctx.beginPath();
+        ctx.arc(rip.x, rip.y, r, 0, Math.PI * 2);
+        ctx.stroke();
+        return true;
+      });
+      ctx.restore();
+    }
+
+    // Particles (Exciting Mode)
+    if (vfx && vfx.particles && vfx.particles.length > 0) {
+      ctx.save();
+      vfx.particles = vfx.particles.filter(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.12; // light gravity
+        p.life -= p.decay;
+        if (p.life <= 0) return false;
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = Math.max(0, p.life);
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = 6 * p.life;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+        ctx.fill();
+        return true;
+      });
       ctx.restore();
     }
   };
@@ -4049,692 +4214,23 @@ export default function ARCamera({
             </div>
           )}
 
-          {/* Secondary Tuning / Calibration Drawer (Toggled via Options button) */}
-          {showAdvancedControls && (
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              background: 'rgba(15, 23, 42, 0.95)',
-              backdropFilter: 'blur(12px)',
-              padding: '8px 16px',
-              borderRadius: '10px',
-              border: '1px solid rgba(255, 255, 255, 0.14)',
-              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)',
-              overflowX: 'auto',
-              maxWidth: '100%'
-            }}>
-              {/* Camera Resolution Selector */}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                color: 'var(--text-secondary)',
-                fontSize: '12px',
-                fontFamily: 'var(--font-mono)'
-              }}>
-                <Video size={13} style={{ color: 'var(--accent-cyan)' }} />
-                <select
-                  value={captureResolution}
-                  onChange={(e) => handleResolutionChange(e.target.value)}
-                  style={{
-                    background: 'rgba(255, 255, 255, 0.08)',
-                    border: '1px solid rgba(255, 255, 255, 0.18)',
-                    borderRadius: '6px',
-                    color: 'var(--text-primary)',
-                    padding: '4px 6px',
-                    fontSize: '11px',
-                    fontFamily: 'var(--font-mono)',
-                    cursor: 'pointer',
-                    outline: 'none'
-                  }}
-                  title="Webcam Capture Resolution"
-                >
-                  <option value="720p" style={{ background: '#0f172a', color: '#fff' }}>720p HD</option>
-                  <option value="480p" style={{ background: '#0f172a', color: '#fff' }}>480p VGA</option>
-                  <option value="1080p" style={{ background: '#0f172a', color: '#fff' }}>1080p FHD</option>
-                </select>
-              </div>
 
-              {/* Camera Device & Facing Mode Selector */}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                color: 'var(--text-secondary)',
-                fontSize: '12px',
-                fontFamily: 'var(--font-mono)',
-                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-                paddingLeft: '10px'
-              }}>
-                <Camera size={13} style={{ color: 'var(--accent-purple)' }} />
-                <select
-                  value={selectedDeviceId || facingMode}
-                  onChange={(e) => handleCameraChange(e.target.value)}
-                  style={{
-                    background: 'rgba(255, 255, 255, 0.08)',
-                    border: '1px solid rgba(255, 255, 255, 0.18)',
-                    borderRadius: '6px',
-                    color: 'var(--text-primary)',
-                    padding: '4px 6px',
-                    fontSize: '11px',
-                    fontFamily: 'var(--font-mono)',
-                    cursor: 'pointer',
-                    outline: 'none',
-                    maxWidth: '160px'
-                  }}
-                  title="Select Camera Input"
-                >
-                  {(isMobileDevice() || availableCameras.length > 1) ? (
-                    <>
-                      <option value="user" style={{ background: '#0f172a', color: '#fff' }}>Front (Selfie)</option>
-                      <option value="environment" style={{ background: '#0f172a', color: '#fff' }}>Back Camera</option>
-                      {availableCameras.map((cam, idx) => (
-                        <option key={cam.deviceId || idx} value={cam.deviceId} style={{ background: '#0f172a', color: '#fff' }}>
-                          {cam.label || `Camera ${idx + 1}`}
-                        </option>
-                      ))}
-                    </>
-                  ) : (
-                    <option value="user" style={{ background: '#0f172a', color: '#fff' }}>
-                      {availableCameras[0]?.label || 'Default Webcam'}
-                    </option>
-                  )}
-                </select>
 
-                {/* Quick Flip Camera Button (shown on mobile or when multiple cameras are detected) */}
-                {(isMobileDevice() || availableCameras.length > 1) && (
-                  <button
-                    type="button"
-                    onClick={handleFlipCamera}
-                    style={{
-                      padding: '3px 6px',
-                      fontSize: '11px',
-                      borderRadius: '5px',
-                      border: '1px solid rgba(255, 255, 255, 0.15)',
-                      background: 'rgba(255, 255, 255, 0.06)',
-                      color: 'var(--text-secondary)',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '3px'
-                    }}
-                    title={`Switch to ${facingMode === 'user' ? 'Back' : 'Front'} Camera`}
-                  >
-                    <SwitchCamera size={12} />
-                    <span>Flip</span>
-                  </button>
-                )}
-
-                {/* Lens / intrinsic calibration */}
-                <button
-                  id="open-camera-calibration"
-                  type="button"
-                  onClick={() => setShowCalibration(true)}
-                  disabled={!cameraActive}
-                  style={{
-                    padding: '3px 8px',
-                    fontSize: '11px',
-                    borderRadius: '5px',
-                    border: (calibStatus.cam1 && (!stereoEnabled || calibStatus.cam2)) ? '1px solid rgba(74, 222, 128, 0.5)' : '1px solid rgba(245, 158, 11, 0.5)',
-                    background: (calibStatus.cam1 && (!stereoEnabled || calibStatus.cam2)) ? 'rgba(74, 222, 128, 0.12)' : 'rgba(245, 158, 11, 0.12)',
-                    color: (calibStatus.cam1 && (!stereoEnabled || calibStatus.cam2)) ? '#86efac' : '#fbbf24',
-                    cursor: cameraActive ? 'pointer' : 'not-allowed',
-                    opacity: cameraActive ? 1 : 0.5,
-                    whiteSpace: 'nowrap'
-                  }}
-                  title="Calibrate camera lens (focal length & distortion) with a printed marker board"
-                >
-                  📐 Calibrate {calibStatus.cam1 ? '✓' : '·'}{stereoEnabled ? (calibStatus.cam2 ? '✓' : '·') : ''}
-                </button>
-
-                {/* Camera Optics & Focus Diagnostic */}
-                <button
-                  type="button"
-                  onClick={() => setShowCameraDiagnostics(true)}
-                  disabled={!cameraActive}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    padding: '3px 8px',
-                    fontSize: '11px',
-                    fontFamily: 'var(--font-mono)',
-                    borderRadius: '5px',
-                    border: cameraDiagnostics?.isFocusLocked ? '1px solid rgba(74, 222, 128, 0.5)' : (cameraDiagnostics?.currentFocusMode === 'continuous' ? '1px solid rgba(245, 158, 11, 0.5)' : '1px solid rgba(56, 189, 248, 0.4)'),
-                    background: cameraDiagnostics?.isFocusLocked ? 'rgba(74, 222, 128, 0.12)' : (cameraDiagnostics?.currentFocusMode === 'continuous' ? 'rgba(245, 158, 11, 0.12)' : 'rgba(56, 189, 248, 0.1)'),
-                    color: cameraDiagnostics?.isFocusLocked ? '#86efac' : (cameraDiagnostics?.currentFocusMode === 'continuous' ? '#fbbf24' : '#38bdf8'),
-                    cursor: cameraActive ? 'pointer' : 'not-allowed',
-                    opacity: cameraActive ? 1 : 0.5,
-                    whiteSpace: 'nowrap'
-                  }}
-                  title="Inspect camera focus mode, exposure, and optics diagnostics"
-                >
-                  <Focus size={12} />
-                  <span>Optics {cameraDiagnostics?.isFocusLocked ? '🔒' : (cameraDiagnostics?.currentFocusMode === 'continuous' ? '⚠️' : '')}</span>
-                </button>
-
-                {/* Finger & Pick Temporal Smoothing Toggle */}
-                <button
-                  type="button"
-                  onClick={() => setSmoothFingers(prev => !prev)}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    padding: '3px 8px',
-                    fontSize: '11px',
-                    fontFamily: 'var(--font-mono)',
-                    borderRadius: '5px',
-                    border: smoothFingers ? '1px solid rgba(168, 85, 247, 0.6)' : '1px solid rgba(148, 163, 184, 0.3)',
-                    background: smoothFingers ? 'rgba(168, 85, 247, 0.15)' : 'rgba(148, 163, 184, 0.08)',
-                    color: smoothFingers ? '#c084fc' : '#94a3b8',
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                    transition: 'all 0.15s ease'
-                  }}
-                  title="Toggle Adaptive 1-Euro temporal smoothing for fretting fingers and strumming pick (kills landmark jitter while preserving fast motion)"
-                >
-                  <Sparkles size={12} />
-                  <span>Smooth: {smoothFingers ? 'ON' : 'OFF'}</span>
-                </button>
-                <a
-                  href="/neck/index.html"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    padding: '4px 8px',
-                    fontSize: '11px',
-                    fontFamily: 'var(--font-mono)',
-                    borderRadius: '5px',
-                    border: '1px solid rgba(56, 189, 248, 0.4)',
-                    background: 'rgba(56, 189, 248, 0.1)',
-                    color: '#38bdf8',
-                    textDecoration: 'none',
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap'
-                  }}
-                  title="Print your own physical AR Guitar practice neck (1:1 scale PDF / SVG template)"
-                >
-                  🎸 Print Neck
-                </a>
-              </div>
-
-              {/* Guitar Tone / Instrument Selector */}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                color: 'var(--text-secondary)',
-                fontSize: '12px',
-                fontFamily: 'var(--font-mono)',
-                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-                paddingLeft: '10px'
-              }}>
-                <span style={{ whiteSpace: 'nowrap' }}>Tone:</span>
-                <select
-                  value={guitarInstrument}
-                  onChange={(e) => handleInstrumentChange(e.target.value)}
-                  style={{
-                    background: 'rgba(255, 255, 255, 0.08)',
-                    border: `1px solid ${GUITAR_INSTRUMENTS[guitarInstrument]?.color || 'rgba(255, 255, 255, 0.2)'}`,
-                    borderRadius: '6px',
-                    color: GUITAR_INSTRUMENTS[guitarInstrument]?.color || 'var(--text-primary)',
-                    padding: '4px 6px',
-                    fontSize: '11px',
-                    fontFamily: 'var(--font-mono)',
-                    cursor: 'pointer',
-                    outline: 'none',
-                    fontWeight: 600
-                  }}
-                  title="Choose Guitar Sound (Acoustic vs Electric Clean vs Electric Rock)"
-                >
-                  {Object.entries(GUITAR_INSTRUMENTS).map(([key, inst]) => (
-                    <option key={key} value={key} style={{ background: '#0f172a', color: inst.color }}>
-                      {inst.icon} {inst.name}
-                    </option>
-                  ))}
-                </select>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = guitarAudio.togglePalmMute();
-                    setIsPalmMuted(next);
-                  }}
-                  style={{
-                    padding: '3px 8px',
-                    fontSize: '11px',
-                    borderRadius: '5px',
-                    border: isPalmMuted ? '1px solid #ef4444' : '1px solid rgba(255, 255, 255, 0.15)',
-                    background: isPalmMuted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(255, 255, 255, 0.06)',
-                    color: isPalmMuted ? '#f87171' : 'var(--text-secondary)',
-                    cursor: 'pointer',
-                    fontFamily: 'var(--font-mono)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px'
-                  }}
-                  title="Palm Mute: Damps string vibrations for punchy staccato rhythm / rock chugging"
-                >
-                  <span>✋</span>
-                  <span>{isPalmMuted ? 'Palm Mute ON' : 'Palm Mute'}</span>
-                </button>
-              </div>
-
-              {/* Dual-Camera (Stereo 3D) Depth Mode Selector */}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                color: 'var(--text-secondary)',
-                fontSize: '12px',
-                fontFamily: 'var(--font-mono)',
-                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-                paddingLeft: '10px'
-              }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = !stereoEnabled;
-                    setStereoEnabled(next);
-                    localStorage.setItem('arguitar_stereo_enabled', next ? 'true' : 'false');
-                    if (addLog) addLog(next ? "👓 Dual-Camera Stereo 3D enabled!" : "Single camera mode restored");
-                  }}
-                  style={{
-                    padding: '3px 8px',
-                    fontSize: '11px',
-                    borderRadius: '5px',
-                    border: stereoEnabled ? '1px solid #38bdf8' : '1px solid rgba(255, 255, 255, 0.15)',
-                    background: stereoEnabled ? 'rgba(6, 182, 212, 0.25)' : 'rgba(255, 255, 255, 0.06)',
-                    color: stereoEnabled ? '#38bdf8' : 'var(--text-secondary)',
-                    cursor: 'pointer',
-                    fontWeight: stereoEnabled ? 'bold' : 'normal',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px'
-                  }}
-                  title="Enable Dual-Camera Stereo 3D Tracking for millimeter-accurate strumming depth and occlusion immunity"
-                >
-                  <span>👓 Stereo 3D</span>
-                  <span style={{
-                    fontSize: '9px',
-                    padding: '1px 4px',
-                    borderRadius: '3px',
-                    background: stereoEnabled ? '#0284c7' : 'rgba(255, 255, 255, 0.1)',
-                    color: '#fff'
-                  }}>
-                    {stereoEnabled ? 'ON' : 'OFF'}
-                  </span>
-                </button>
-
-                {stereoEnabled && (
-                  <>
-                    <select
-                      value={secondaryDeviceId}
-                      onChange={(e) => {
-                        setSecondaryDeviceId(e.target.value);
-                        localStorage.setItem('arguitar_secondary_cam', e.target.value);
-                      }}
-                      style={{
-                        background: 'rgba(255, 255, 255, 0.08)',
-                        border: '1px solid rgba(56, 189, 248, 0.35)',
-                        borderRadius: '6px',
-                        color: '#38bdf8',
-                        padding: '3px 6px',
-                        fontSize: '11px',
-                        fontFamily: 'var(--font-mono)',
-                        cursor: 'pointer',
-                        outline: 'none',
-                        maxWidth: '140px'
-                      }}
-                      title="Select Secondary Camera (Cam 2)"
-                    >
-                      <option value="" style={{ background: '#0f172a', color: '#94a3b8' }}>Select 2nd Cam...</option>
-                      {availableCameras
-                        .filter(cam => cam.deviceId !== selectedDeviceId)
-                        .map((cam, idx) => (
-                          <option key={cam.deviceId || idx} value={cam.deviceId} style={{ background: '#0f172a', color: '#fff' }}>
-                            {cam.label || `Camera ${idx + 2}`}
-                          </option>
-                        ))}
-                    </select>
-
-                    {/* PiP preview toggle */}
-                    <button
-                      type="button"
-                      onClick={() => setShowPip(prev => !prev)}
-                      style={{
-                        padding: '2px 6px',
-                        fontSize: '10px',
-                        borderRadius: '4px',
-                        border: showPip ? '1px solid #06b6d4' : '1px solid rgba(255, 255, 255, 0.15)',
-                        background: showPip ? 'rgba(6, 182, 212, 0.2)' : 'rgba(255, 255, 255, 0.05)',
-                        color: showPip ? '#38bdf8' : 'var(--text-secondary)',
-                        cursor: 'pointer'
-                      }}
-                      title="Toggle Cam 2 Picture-in-Picture window"
-                    >
-                      PiP
-                    </button>
-
-                    {/* Live calibration readout */}
-                    <span style={{
-                      fontSize: '10px',
-                      color: stereoStatus.calibrated ? '#4ade80' : '#f59e0b',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '3px',
-                      whiteSpace: 'nowrap'
-                    }}>
-                      {stereoStatus.calibrated ? `🟢 ${stereoStatus.baseline}cm (${stereoStatus.angle}°)` : '🟡 Aligning...'}
-                    </span>
-
-                    {/* Physical Baseline Calibrator */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }} title="Physical distance between webcams in cm (measured 34 cm)">
-                      <span style={{ fontSize: '10px', color: '#94a3b8' }}>Physical:</span>
-                      <input
-                        type="number"
-                        min="10"
-                        max="150"
-                        step="0.5"
-                        defaultValue="34.0"
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value);
-                          if (val > 0) stereoTracker.setUserBaseline(val);
-                        }}
-                        style={{
-                          width: '42px',
-                          background: 'rgba(255, 255, 255, 0.08)',
-                          border: '1px solid rgba(56, 189, 248, 0.3)',
-                          borderRadius: '4px',
-                          color: '#38bdf8',
-                          padding: '1px 3px',
-                          fontSize: '10px',
-                          fontFamily: 'var(--font-mono)',
-                          textAlign: 'center'
-                        }}
-                      />
-                      <span style={{ fontSize: '10px', color: '#94a3b8' }}>cm</span>
-                    </div>
-
-                    {/* Zero Strum Button */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const now = performance.now();
-                          const last = lastLiveClearanceRef.current;
-                          if (last && last.cm !== null && (now - last.time) < 3000) {
-                            const newOffset = stereoTracker.zeroStrumPlane(last.cm);
-                            setStrumOffset(newOffset);
-                            if (addLog) addLog(`🎯 Strum plane zeroed! (Offset: ${newOffset.toFixed(1)}cm)`);
-                          } else {
-                            if (addLog) addLog(`⚠️ Strum hand not detected in stereo. Rest pick/fingers on strings and try again.`);
-                          }
-                        }}
-                        style={{
-                          padding: '2px 7px',
-                          fontSize: '10px',
-                          borderRadius: '4px',
-                          border: '1px solid rgba(245, 158, 11, 0.5)',
-                          background: 'rgba(245, 158, 11, 0.15)',
-                          color: '#fbbf24',
-                          cursor: 'pointer',
-                          fontWeight: 'bold',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '3px'
-                        }}
-                        title="Touch strings with pick/fingers and click to zero strum depth live (clears air-hover error)"
-                      >
-                        <span>🎯 Zero Strum</span>
-                        {stereoStatus.liveClearance !== null && (
-                          <span style={{ fontSize: '9px', opacity: 0.85 }}>
-                            ({parseFloat(stereoStatus.liveClearance) >= 0 ? '+' : ''}{stereoStatus.liveClearance}cm)
-                          </span>
-                        )}
-                      </button>
-
-                      {/* Reset strum offset button */}
-                      {Math.abs(strumOffset - 1.2) > 0.05 && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const def = stereoTracker.resetStrumPlaneOffset();
-                            setStrumOffset(def);
-                            if (addLog) addLog(`Strum offset reset to default (${def.toFixed(1)}cm)`);
-                          }}
-                          style={{
-                            padding: '1px 4px',
-                            fontSize: '9px',
-                            borderRadius: '3px',
-                            border: '1px solid rgba(255, 255, 255, 0.2)',
-                            background: 'rgba(255, 255, 255, 0.05)',
-                            color: '#94a3b8',
-                            cursor: 'pointer'
-                          }}
-                          title="Reset strum offset to default (1.2cm)"
-                        >
-                          ↺
-                        </button>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Neck Width Calibrator */}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                color: 'var(--text-secondary)',
-                fontSize: '12px',
-                fontFamily: 'var(--font-mono)',
-                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-                paddingLeft: '10px'
-              }}>
-                <Sliders size={13} style={{ color: 'var(--accent-cyan)' }} />
-                <span style={{ whiteSpace: 'nowrap' }}>Width:</span>
-                <input
-                  type="range"
-                  min="1.0"
-                  max="2.5"
-                  step="0.05"
-                  value={neckWidthScale}
-                  onChange={(e) => setNeckWidthScale(parseFloat(e.target.value))}
-                  style={{
-                    width: '56px',
-                    accentColor: 'var(--accent-cyan)',
-                    cursor: 'pointer'
-                  }}
-                  title="Adjust visual string spacing across the neck"
-                />
-                <span style={{ color: 'var(--accent-cyan)', minWidth: '30px', fontWeight: 'bold', fontSize: '11px' }}>
-                  {neckWidthScale.toFixed(2)}x
-                </span>
-              </div>
-
-              {/* Fret Scale Calibrator */}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                color: 'var(--text-secondary)',
-                fontSize: '12px',
-                fontFamily: 'var(--font-mono)',
-                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-                paddingLeft: '10px'
-              }}>
-                <Sliders size={13} style={{ color: 'var(--accent-green)' }} />
-                <span style={{ whiteSpace: 'nowrap' }}>Scale:</span>
-                <input
-                  type="range"
-                  min="46.0"
-                  max="58.0"
-                  step="0.2"
-                  value={fretScaleLength}
-                  onChange={(e) => setFretScaleLength(parseFloat(e.target.value))}
-                  style={{
-                    width: '56px',
-                    accentColor: 'var(--accent-green)',
-                    cursor: 'pointer'
-                  }}
-                  title="Adjust 12th fret alignment along the neck"
-                />
-                <span style={{ color: 'var(--accent-green)', minWidth: '38px', fontWeight: 'bold', fontSize: '11px' }}>
-                  {fretScaleLength.toFixed(1)}cm
-                </span>
-              </div>
-
-              {/* Video Size Selector */}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                color: 'var(--text-secondary)',
-                fontSize: '12px',
-                fontFamily: 'var(--font-mono)',
-                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-                paddingLeft: '10px'
-              }}>
-                <span style={{ whiteSpace: 'nowrap', marginRight: '2px' }}>Size:</span>
-                {[
-                  { label: '800', value: '800' },
-                  { label: '1000', value: '1000' },
-                  { label: '1200', value: '1200' },
-                  { label: 'Fit', value: 'full' }
-                ].map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => onCameraSizeChange && onCameraSizeChange(opt.value)}
-                    style={{
-                      padding: '2px 6px',
-                      fontSize: '11px',
-                      borderRadius: '5px',
-                      border: cameraSize === opt.value ? '1px solid var(--accent-cyan)' : '1px solid rgba(255, 255, 255, 0.12)',
-                      background: cameraSize === opt.value ? 'rgba(6, 182, 212, 0.25)' : 'rgba(255, 255, 255, 0.05)',
-                      color: cameraSize === opt.value ? '#38bdf8' : 'var(--text-secondary)',
-                      cursor: 'pointer',
-                      fontWeight: cameraSize === opt.value ? 'bold' : 'normal',
-                      transition: 'all 0.15s ease'
-                    }}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* Debug Marker & Alignment Diagnostics Toggle */}
-              <button
-                type="button"
-                onClick={() => setShowMarkerDebug(prev => !prev)}
-                style={{
-                  padding: '3px 8px',
-                  fontSize: '11px',
-                  borderRadius: '6px',
-                  border: showMarkerDebug ? '1px solid #f59e0b' : '1px solid rgba(255, 255, 255, 0.14)',
-                  background: showMarkerDebug ? 'rgba(245, 158, 11, 0.25)' : 'rgba(255, 255, 255, 0.05)',
-                  color: showMarkerDebug ? '#fbbf24' : 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  fontWeight: showMarkerDebug ? 'bold' : 'normal',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  whiteSpace: 'nowrap',
-                  borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-                  marginLeft: '4px',
-                  transition: 'all 0.15s ease'
-                }}
-                title="Toggle live on-screen ArUco marker centers, baseline vector, and nut/bridge ray tracing"
-              >
-                🛠️ {showMarkerDebug ? 'Hide Debug' : 'Debug Rays'}
-              </button>
-
-              {/* MediaPipe Delegate Switcher (GPU vs Multi-core CPU) */}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                color: 'var(--text-secondary)',
-                fontSize: '12px',
-                fontFamily: 'var(--font-mono)',
-                borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-                paddingLeft: '10px'
-              }}>
-                <Cpu size={13} style={{ color: mpDelegate === 'GPU' ? '#86efac' : '#f59e0b' }} />
-                <button
-                  type="button"
-                  onClick={handleToggleMpDelegate}
-                  style={{
-                    padding: '3px 8px',
-                    fontSize: '11px',
-                    borderRadius: '5px',
-                    border: '1px solid rgba(255, 255, 255, 0.18)',
-                    background: mpDelegate === 'GPU' ? 'rgba(34, 197, 94, 0.2)' : 'rgba(245, 158, 11, 0.2)',
-                    color: mpDelegate === 'GPU' ? '#86efac' : '#fbbf24',
-                    cursor: 'pointer',
-                    fontWeight: 'bold',
-                    fontFamily: 'var(--font-mono)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px'
-                  }}
-                  title="Switch MediaPipe backend between WebGL GPU and Multi-core CPU (XNNPACK SIMD)"
-                >
-                  {mpDelegate === 'GPU' ? '⚡ GPU' : '🧠 CPU (SIMD)'}
-                </button>
-              </div>
-
-              {/* Performance Profiler Toggle */}
-              <button
-                type="button"
-                onClick={() => setShowProfiler(prev => !prev)}
-                style={{
-                  padding: '3px 8px',
-                  fontSize: '11px',
-                  borderRadius: '6px',
-                  border: showProfiler ? '1px solid #06b6d4' : '1px solid rgba(255, 255, 255, 0.14)',
-                  background: showProfiler ? 'rgba(6, 182, 212, 0.25)' : 'rgba(255, 255, 255, 0.05)',
-                  color: showProfiler ? '#38bdf8' : 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  fontWeight: showProfiler ? 'bold' : 'normal',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  whiteSpace: 'nowrap',
-                  borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-                  marginLeft: '4px',
-                  transition: 'all 0.15s ease'
-                }}
-                title="Toggle live hardware execution profiler & telemetry"
-              >
-                <Activity size={12} color={showProfiler ? '#38bdf8' : 'var(--text-secondary)'} />
-                <span>{showProfiler ? 'Hide Profiler' : '⚡ Profiler'}</span>
-              </button>
-            </div>
-          )}
-
-          {/* Primary Essential Controls Bar */}
+          {/* Streamlined Primary Controls Dock */}
           <div style={{
             display: 'flex',
             alignItems: 'center',
             gap: '10px',
-            background: 'rgba(15, 23, 42, 0.9)',
-            backdropFilter: 'blur(10px)',
-            padding: '8px 14px',
+            background: 'rgba(15, 23, 42, 0.92)',
+            backdropFilter: 'blur(12px)',
+            padding: '8px 16px',
             borderRadius: '12px',
             border: '1px solid rgba(255, 255, 255, 0.12)',
             boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
             overflowX: 'auto',
             maxWidth: '100%'
           }}>
-            {/* Start / Stop Camera Button */}
+            {/* Start / Stop Camera */}
             {cameraActive ? (
               <button
                 className="btn-premium"
@@ -4753,7 +4249,7 @@ export default function ARCamera({
               </button>
             )}
 
-            {/* Play-Along Songs Toggle Button */}
+            {/* Songs Highway Toggle */}
             <button
               type="button"
               className={`btn-secondary ${showSongStudio ? 'active' : ''}`}
@@ -4770,7 +4266,7 @@ export default function ARCamera({
                 cursor: 'pointer',
                 transition: 'all 0.15s ease'
               }}
-              title="Toggle interactive play-along song highway & track library"
+              title="Toggle interactive play-along song highway & track library [S]"
             >
               <Music size={14} color={showSongStudio ? 'var(--accent-purple)' : 'var(--text-secondary)'} />
               <span style={{ fontFamily: 'var(--font-mono)' }}>Songs</span>
@@ -4786,7 +4282,7 @@ export default function ARCamera({
               </span>
             </button>
 
-            {/* Real-time Audio Toggle Button */}
+            {/* Sound Mute / Unmute */}
             <button
               type="button"
               className={`btn-secondary ${audioEnabled ? 'active' : ''}`}
@@ -4809,7 +4305,7 @@ export default function ARCamera({
               <span style={{ fontFamily: 'var(--font-mono)' }}>{audioEnabled ? 'Sound ON' : 'Muted'}</span>
             </button>
 
-            {/* Guitar Sound Model / Instrument Cycle Button */}
+            {/* Guitar Tone Model Cycle */}
             <button
               type="button"
               className="btn-secondary"
@@ -4834,130 +4330,6 @@ export default function ARCamera({
               </span>
             </button>
 
-            {/* Palm Mute (Damping) Toggle */}
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                const next = guitarAudio.togglePalmMute();
-                setIsPalmMuted(next);
-                if (addLog) addLog(next ? "✋ Palm Mute ON: Tight staccato chugging" : "✋ Palm Mute OFF: Open sustain");
-              }}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px',
-                padding: '6px 10px',
-                fontSize: '12px',
-                background: isPalmMuted ? 'rgba(239, 68, 68, 0.22)' : 'rgba(255, 255, 255, 0.05)',
-                borderColor: isPalmMuted ? '#ef4444' : 'rgba(255, 255, 255, 0.15)'
-              }}
-              title={isPalmMuted ? "Palm Mute ON (Click to play open sustain)" : "Palm Mute OFF (Click for tight staccato rock/metal chugging)"}
-            >
-              <span>✋</span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: isPalmMuted ? '#f87171' : 'var(--text-secondary)' }}>
-                {isPalmMuted ? 'Muted' : 'Open'}
-              </span>
-            </button>
-
-            {/* Stereo 3D Status Indicator / Toggle */}
-            {stereoEnabled && (
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  setShowPip(prev => !prev);
-                }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '6px 10px',
-                  fontSize: '12px',
-                  borderColor: stereoStatus.calibrated ? '#38bdf8' : '#f59e0b'
-                }}
-                title="Dual-Camera Stereo 3D active (Click to toggle Cam 2 Picture-in-Picture preview)"
-              >
-                <span>👓</span>
-                <span style={{ fontFamily: 'var(--font-mono)', color: stereoStatus.calibrated ? '#38bdf8' : '#fbbf24' }}>
-                  {stereoStatus.calibrated ? `Stereo: ${stereoStatus.baseline}cm` : 'Stereo Aligning'}
-                </span>
-              </button>
-            )}
-
-            {/* Strum Mode Cycle Button */}
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                const modes = ['down', 'smart', 'both'];
-                const nextIdx = (modes.indexOf(strumMode) + 1) % modes.length;
-                setStrumMode(modes[nextIdx]);
-              }}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '6px 10px',
-                fontSize: '12px',
-                borderColor: strumMode === 'down' ? '#f59e0b' : (strumMode === 'smart' ? '#06b6d4' : '#a855f7')
-              }}
-              title="Click to cycle strum mode: Down Only -> Smart Strum (Play upstrokes, mute air returns) -> Down & Up"
-            >
-              <Compass size={14} color={strumMode === 'down' ? '#f59e0b' : (strumMode === 'smart' ? '#06b6d4' : '#a855f7')} />
-              <span style={{ fontFamily: 'var(--font-mono)' }}>
-                {strumMode === 'down' && '⬇️ Down Only'}
-                {strumMode === 'smart' && '🎯 Smart Strum'}
-                {strumMode === 'both' && '⇅ Down & Up'}
-              </span>
-            </button>
-
-            {/* Play-Along Song Difficulty Level Button */}
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                const nextLevel = (playLevel % 3) + 1;
-                setPlayLevel(nextLevel);
-              }}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '6px 10px',
-                fontSize: '12px',
-                borderColor: playLevel === 1 ? '#38bdf8' : (playLevel === 2 ? '#10b981' : '#f59e0b')
-              }}
-              title="Click to cycle song play difficulty: Level 1 (Auto-Chord) -> Level 2 (Assist / Close Enough) -> Level 3 (Pro / Realistic)"
-            >
-              <Award size={14} color={playLevel === 1 ? '#38bdf8' : (playLevel === 2 ? '#10b981' : '#f59e0b')} />
-              <span style={{ fontFamily: 'var(--font-mono)' }}>
-                {playLevel === 1 && '⭐ L1: Auto'}
-                {playLevel === 2 && '🎯 L2: Assist'}
-                {playLevel === 3 && '🔥 L3: Pro'}
-              </span>
-            </button>
-
-            {/* Advanced Tuning / Calibrate Toggle */}
-            <button
-              type="button"
-              className={`btn-secondary ${showAdvancedControls ? 'active' : ''}`}
-              onClick={() => setShowAdvancedControls(prev => !prev)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px',
-                padding: '6px 10px',
-                fontSize: '12px',
-                borderColor: showAdvancedControls ? 'var(--accent-cyan)' : 'rgba(255, 255, 255, 0.15)',
-                background: showAdvancedControls ? 'rgba(6, 182, 212, 0.15)' : undefined
-              }}
-              title="Toggle Calibration & Resolution Options"
-            >
-              <Settings size={14} style={{ color: showAdvancedControls ? 'var(--accent-cyan)' : 'var(--text-secondary)' }} />
-              <span style={{ fontFamily: 'var(--font-mono)' }}>Options</span>
-            </button>
-
             {/* Beginner Walkthrough Guide Quick Button */}
             {onOpenWalkthrough && (
               <button
@@ -4974,62 +4346,36 @@ export default function ARCamera({
                   background: 'rgba(56, 189, 248, 0.12)',
                   color: '#38bdf8'
                 }}
-                title="Open Beginner Play-Along Guide"
+                title="Open Beginner Play-Along Guide [H]"
               >
                 <span>📖</span>
                 <span style={{ fontFamily: 'var(--font-mono)' }}>Guide</span>
               </button>
             )}
 
-            {/* Finger & Pick Temporal Smoothing Quick Toggle */}
+            {/* Guitar Settings & Options Drawer Toggle */}
             <button
               type="button"
-              className={`btn-secondary ${smoothFingers ? 'active' : ''}`}
-              onClick={() => setSmoothFingers(prev => !prev)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px',
-                padding: '6px 10px',
-                fontSize: '12px',
-                borderColor: smoothFingers ? 'rgba(192, 132, 252, 0.6)' : 'rgba(255, 255, 255, 0.15)',
-                background: smoothFingers ? 'rgba(168, 85, 247, 0.18)' : undefined,
-                color: smoothFingers ? '#c084fc' : 'var(--text-secondary)'
-              }}
-              title="Toggle 1-Euro adaptive temporal smoothing for fretting fingers and strumming pick (kills tracking jitter while keeping zero lag)"
-            >
-              <Sparkles size={14} style={{ color: smoothFingers ? '#c084fc' : 'var(--text-secondary)' }} />
-              <span style={{ fontFamily: 'var(--font-mono)' }}>Smooth: {smoothFingers ? 'ON' : 'OFF'}</span>
-            </button>
-
-            {/* ArUco Session Recorder Toggle */}
-            <button
-              id="rec-toggle-btn"
-              type="button"
-              className={`btn-secondary ${showRecorder || recState === 'recording' ? 'active' : ''}`}
-              onClick={() => setShowRecorder(prev => !prev)}
+              className={`btn-secondary ${showAdvancedControls ? 'active' : ''}`}
+              onClick={() => setShowAdvancedControls(prev => !prev)}
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
-                padding: '6px 10px',
+                padding: '6px 12px',
                 fontSize: '12px',
-                borderColor: recState === 'recording'
-                  ? 'var(--accent-red)'
-                  : (showRecorder ? 'rgba(239, 68, 68, 0.6)' : 'rgba(255, 255, 255, 0.15)'),
-                background: recState === 'recording' ? 'rgba(239, 68, 68, 0.2)' : undefined
+                borderColor: showAdvancedControls ? 'var(--accent-purple)' : 'rgba(255, 255, 255, 0.15)',
+                background: showAdvancedControls ? 'rgba(168, 85, 247, 0.2)' : undefined,
+                color: showAdvancedControls ? '#d8b4fe' : 'var(--text-secondary)'
               }}
-              title="Record camera video + ArUco detection metrics for offline analysis"
+              title="Open Guitar Settings & Options Drawer [O]"
             >
-              <span className={`rec-dot ${recState === 'recording' ? 'recording' : ''}`} />
-              <span style={{ fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
-                {recState === 'recording'
-                  ? `REC ${Math.floor((recLiveStats?.elapsedSec || 0) / 60)}:${String(Math.floor((recLiveStats?.elapsedSec || 0) % 60)).padStart(2, '0')}`
-                  : 'Record'}
-              </span>
+              <Settings size={14} style={{ color: showAdvancedControls ? 'var(--accent-purple)' : 'var(--text-secondary)' }} />
+              <span style={{ fontFamily: 'var(--font-mono)' }}>Options</span>
+              <kbd style={{ fontSize: '9px', padding: '1px 5px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '3px' }}>O</kbd>
             </button>
 
-            {/* Fullscreen Button in Controls Bar */}
+            {/* Fullscreen Button */}
             <button
               type="button"
               onClick={toggleFullscreen}
@@ -5050,6 +4396,90 @@ export default function ARCamera({
             </button>
           </div>
         </div>
+
+      {/* Comprehensive Slide-out Guitar Settings & Options Drawer */}
+      <GuitarConfigDrawer
+        isOpen={showAdvancedControls}
+        onClose={() => setShowAdvancedControls(false)}
+        containerRef={containerRef}
+        isFullscreen={isFullscreen}
+        // Play & Feel
+        strumMode={strumMode}
+        setStrumMode={setStrumMode}
+        isPalmMuted={isPalmMuted}
+        onTogglePalmMute={() => {
+          const next = guitarAudio.togglePalmMute();
+          setIsPalmMuted(next);
+          if (addLog) addLog(next ? "✋ Palm Mute ON: Tight staccato chugging" : "✋ Palm Mute OFF: Open sustain");
+        }}
+        playLevel={playLevel}
+        setPlayLevel={setPlayLevel}
+        smoothFingers={smoothFingers}
+        setSmoothFingers={setSmoothFingers}
+        // Neck Geometry
+        neckWidthScale={neckWidthScale}
+        setNeckWidthScale={setNeckWidthScale}
+        fretScaleLength={fretScaleLength}
+        setFretScaleLength={setFretScaleLength}
+        strumOffset={strumOffset}
+        onZeroStrum={() => {
+          const now = performance.now();
+          const last = lastLiveClearanceRef.current;
+          if (last && last.cm !== null && (now - last.time) < 3000) {
+            const newOffset = stereoTracker.zeroStrumPlane(last.cm);
+            setStrumOffset(newOffset);
+            if (addLog) addLog(`🎯 Strum plane zeroed! (Offset: ${newOffset.toFixed(1)}cm)`);
+          } else {
+            if (addLog) addLog(`⚠️ Strum hand not detected in stereo. Rest pick/fingers on strings and try again.`);
+          }
+        }}
+        onResetStrumOffset={() => {
+          const def = stereoTracker.resetStrumPlaneOffset();
+          setStrumOffset(def);
+          if (addLog) addLog(`Strum offset reset to default (${def.toFixed(1)}cm)`);
+        }}
+        stereoStatus={stereoStatus}
+        // Camera & Video
+        availableCameras={availableCameras}
+        selectedDeviceId={selectedDeviceId}
+        onCameraChange={handleCameraChange}
+        facingMode={facingMode}
+        onFlipCamera={handleFlipCamera}
+        isMobile={isMobileDevice()}
+        captureResolution={captureResolution}
+        onResolutionChange={handleResolutionChange}
+        cameraSize={cameraSize}
+        onCameraSizeChange={(val) => onCameraSizeChange && onCameraSizeChange(val)}
+        cameraActive={cameraActive}
+        calibStatus={calibStatus}
+        onOpenCalibration={() => setShowCalibration(true)}
+        cameraDiagnostics={cameraDiagnostics}
+        onOpenDiagnostics={() => setShowCameraDiagnostics(true)}
+        // Advanced & Diagnostics
+        stereoEnabled={stereoEnabled}
+        onToggleStereo={() => {
+          const next = !stereoEnabled;
+          setStereoEnabled(next);
+          localStorage.setItem('arguitar_stereo_enabled', next ? 'true' : 'false');
+          if (addLog) addLog(next ? "👓 Dual-Camera Stereo 3D enabled!" : "Single camera mode restored");
+        }}
+        secondaryDeviceId={secondaryDeviceId}
+        onSecondaryDeviceChange={(val) => {
+          setSecondaryDeviceId(val);
+          localStorage.setItem('arguitar_secondary_cam', val);
+        }}
+        showPip={showPip}
+        setShowPip={setShowPip}
+        mpDelegate={mpDelegate}
+        onToggleMpDelegate={handleToggleMpDelegate}
+        showMarkerDebug={showMarkerDebug}
+        setShowMarkerDebug={setShowMarkerDebug}
+        showProfiler={showProfiler}
+        setShowProfiler={setShowProfiler}
+        showRecorder={showRecorder}
+        setShowRecorder={setShowRecorder}
+        recState={recState}
+      />
 
       {/* Clean HUD Live & FPS Label + Hardware Diagnostics (Only when active) */}
       {cameraActive && (
